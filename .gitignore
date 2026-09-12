@@ -1,0 +1,4 @@
+pluggy.db
+pluggy.db-*
+__pycache__/
+*.pyc
