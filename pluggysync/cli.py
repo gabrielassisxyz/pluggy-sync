@@ -16,11 +16,13 @@ import subprocess
 import sys
 from collections.abc import Callable, Sequence
 
+from .check import check_file
 from .events import ProjectionBlocked
 from .ledger import LegacyDatabase, UnknownDatabase, open_ledger
 from .legacy_import import ImportFailed, import_states
-from .lock import LockHeld, ProcessLock
+from .lock import LockHeld, LockRefused, ProcessLock
 from .rebuild import rebuild
+from .reparse import ReparseRefused, reparse
 from .run import ConfigurationError, LedgerRun, code_version, parse_item_ids
 from .transport import OnAttempt
 from .walk import Client, Clock, SystemClock
@@ -175,6 +177,24 @@ def rebuild_mode(path: str) -> int:
         lock.release()
 
 
+def check_mode(path: str) -> int:
+    code, problems, info = check_file(path)
+    for line in info:
+        print(line)
+    if code == 0:
+        print(f"{path}: check clean")
+        return 0
+    for line in problems:
+        _say(line)
+    return 1
+
+
+def reparse_mode(source: str, dest: str, retime: bool) -> int:
+    reparse(source, dest, retime=retime)
+    print(f"{dest}: reparsed from {source}")
+    return 0
+
+
 def main(
     argv: Sequence[str] | None = None,
     make_client: MakeClient | None = None,
@@ -196,6 +216,21 @@ def main(
         help="regenerate events, states and current-state tables from the ledger",
     )
     parser.add_argument(
+        "--check",
+        action="store_true",
+        help="report every inconsistency between the archive, the ledger and the projections",
+    )
+    parser.add_argument(
+        "--reparse",
+        metavar="PATH",
+        help="rebuild a corrected copy of the whole history from the response archive",
+    )
+    parser.add_argument(
+        "--retime",
+        action="store_true",
+        help="recompute local days under the current time rules during --reparse",
+    )
+    parser.add_argument(
         "--from-states",
         metavar="STATE",
         nargs="+",
@@ -206,11 +241,32 @@ def main(
     if args.from_states and not args.candidate:
         _say("--from-states needs --candidate <path>: the import never touches the live database")
         return 2
-    if not args.candidate and not args.rebuild:
+    if args.from_states and (args.check or args.reparse or args.rebuild):
+        _say("--from-states cannot be combined with --check, --reparse or --rebuild")
+        return 2
+    modes = (args.candidate, args.rebuild, args.check, args.reparse, args.retime, args.from_states)
+    if not any(modes):
         from pluggy_sync import sync  # the legacy path, until cutover
 
         return sync()
+    if args.retime and not args.reparse:
+        _say("--retime needs --reparse")
+        return 2
+    if args.check and args.reparse:
+        _say("--check and --reparse cannot be combined")
+        return 2
+    if args.rebuild and (args.check or args.reparse):
+        _say("--rebuild cannot be combined with --check or --reparse")
+        return 2
     try:
+        if args.reparse:
+            source = (
+                check_candidate_path(args.candidate, live_db_path())
+                if args.candidate
+                else live_db_path()
+            )
+            dest = check_candidate_path(args.reparse, live_db_path())
+            return reparse_mode(source, dest, args.retime)
         path = (
             check_candidate_path(args.candidate, live_db_path())
             if args.candidate
@@ -218,12 +274,24 @@ def main(
         )
         if args.from_states:
             return import_mode(path, args.from_states)
+        if args.check:
+            return check_mode(path)
         if args.rebuild:
             return rebuild_mode(path)
         return ledger_sync(path, make_client, clock)
-    except (CandidateRefused, ConfigurationError) as refused:
+    except (CandidateRefused, ConfigurationError, ReparseRefused) as refused:
         _say(str(refused))
         return 2
-    except (LockHeld, LegacyDatabase, UnknownDatabase, ProjectionBlocked, ImportFailed) as refused:
+    except (
+        LockHeld,
+        LockRefused,
+        LegacyDatabase,
+        UnknownDatabase,
+        ProjectionBlocked,
+        ImportFailed,
+    ) as refused:
         _say(str(refused))
+        return 1
+    except RuntimeError as failed:
+        _say(str(failed))
         return 1
