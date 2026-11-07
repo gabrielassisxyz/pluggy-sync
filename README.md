@@ -25,9 +25,10 @@ second run refreshes what changed and adds what is new.
 
 ## What it stores, and why it stores it twice
 
-Every table keeps the provider's JSON verbatim in a `raw` column. The extracted
-columns next to it — date, amount, description, balance — exist so the common
-queries can use an index, not to replace the document they came from.
+Every table keeps the provider's JSON for the row in a `raw` column (the parsed
+document, re-serialised; not the response bytes). The extracted columns next to
+it, date, amount, description, balance, exist so the common queries can use an
+index, not to replace the document they came from.
 
 That redundancy is the point. Provider-side enrichment is not permanent:
 transaction categories arrive while a plan includes them and stop when it does
@@ -53,10 +54,27 @@ publish identity" is a finding worth keeping rather than an error worth hiding.
   produced; `items.last_updated` and `items.next_auto_sync` record it.
 - **Read only.** Nothing here can move money or change anything at a bank.
 
-History runs about twelve months back, which is what Open Finance retains.
+History reaches back at least fourteen months in practice. The provider does not
+publish the retention window, so collect regularly rather than count on it.
 
 ## Scheduling
 
 The provider syncs roughly every 24 hours and prohibits batch processes against
-the API. Once a day, after `next_auto_sync` has passed, is the whole of it —
+the API. Once a day, after `next_auto_sync` has passed, is the whole of it;
 anything more frequent re-reads the same rows.
+
+## Development
+
+```sh
+bin/install-hooks   # once after clone: secret scan on every commit
+bin/ci              # the exact gate CI runs: gitleaks, shellcheck, ruff, tests
+python3 -m unittest discover -s tests -t .
+```
+
+`bin/ci` needs `gitleaks`, `shellcheck` and `ruff` on the machine and says which one
+is missing. Tests never touch the network or real data; fixtures are synthetic.
+
+Work is tracked in `.beads/` with [br](https://github.com/Dicklesworthstone/beads_rust):
+`br ready` lists what can be picked up next. `AGENTS.md` is the spec for anyone, human
+or agent, changing the code.
+
