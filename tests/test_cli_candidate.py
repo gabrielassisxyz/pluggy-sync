@@ -12,6 +12,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 from pluggysync.cli import main
+from pluggysync.legacy_schema import LEGACY_SCHEMA
 from pluggysync.walk import Client
 from tests.fakes import FakeClock, FakeTransport
 from tests.fixtures.ledger_run import ITEM_A, ITEM_B, script_two_items
@@ -108,10 +109,8 @@ class CandidateCliTest(unittest.TestCase):
         self.assertIn("rebuilt from 1 runs", out)
 
     def test_rebuild_against_the_legacy_live_database_is_refused(self) -> None:
-        import pluggy_sync
-
         legacy = sqlite3.connect(self.live)
-        legacy.executescript(pluggy_sync.SCHEMA)
+        legacy.executescript(LEGACY_SCHEMA)
         legacy.execute("INSERT INTO sync_runs (started_at) VALUES ('x')")
         legacy.commit()
         legacy.close()

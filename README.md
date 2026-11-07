@@ -4,7 +4,7 @@ Pulls everything a Pluggy account will hand over into one local SQLite file, and
 keeps every version of everything it ever received.
 
 No dependencies beyond the Python standard library, no install step, no build.
-One entry point, one database.
+One entry point, one database, every version kept.
 
 ## Running it
 
@@ -17,18 +17,32 @@ PLUGGY_ITEM_IDS        connection ids, comma-separated
 ```
 
 ```sh
-./pluggy_sync.py                          # the legacy sync, into pluggy.db (or PLUGGY_DB)
-./pluggy_sync.py --candidate PATH         # the ledger sync, into a dedicated candidate file
-./pluggy_sync.py --rebuild --candidate PATH   # regenerate the derived layer of a candidate
+./pluggy_sync.py                              # one ledger run into pluggy.db (or PLUGGY_DB)
+./pluggy_sync.py --check                      # the integrity report, read-only
+./pluggy_sync.py --rebuild                    # regenerate the derived layer
+./pluggy_sync.py --reparse OUT [--retime]     # a corrected copy of the whole history
+./pluggy_sync.py --candidate PATH [--from-states STATE ...]
+./pluggy_sync.py --promote PATH --from-states STATE ...
 ```
 
-Until the cutover, the plain invocation is the legacy collector: one row per
-record, overwritten on every run. The ledger described below runs only against
-a **candidate** database named with `--candidate`. A candidate is never the
-live file nor an alias of it, and never an unignored path inside this
-repository, because the file holds a person's complete financial history. The
-historical import, the integrity check and the promotion of a candidate to the
-live file are the next steps and are not here yet.
+A run sweeps whatever a crash left open, plans its walks, archives every
+response as it arrives, derives the sightings, computes the events and
+refreshes the current-state tables. It exits non-zero when it did not close
+`complete`. The database it writes must carry its `cutover` row, the mark the
+promotion leaves; a legacy file, or a ledger file that was never promoted, is
+refused with the two commands that get it there.
+
+`--candidate PATH` runs the same sync against a dedicated file, never the live
+one nor an alias of it, and never an unignored path inside this repository,
+because the file holds a person's complete financial history. With
+`--from-states` it builds the candidate from frozen copies of the legacy
+database instead of running a sync. `--promote PATH --from-states STATE ...`
+makes a checked candidate the live database: it refuses if the live file
+diverged from the last frozen state, keeps the legacy file as
+`<file>-legacy-final`, stages a copy beside the live file, marks and checks
+it, renames it into place and checks it again. A crash anywhere before the
+rename leaves the legacy file in place and a marked staging file the next
+`--promote` finishes from.
 
 Re-running is safe. The ledger never overwrites: a run adds what it saw.
 
