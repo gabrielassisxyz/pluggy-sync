@@ -19,8 +19,9 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
-from typing import Any, Iterator
+from collections.abc import Iterator
+from datetime import UTC, datetime
+from typing import Any
 
 BASE = "https://api.pluggy.ai"
 DB_PATH = os.environ.get(
@@ -35,7 +36,7 @@ REQUEST_GAP_SECONDS = 0.15
 
 
 def utcnow() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 class Pluggy:
@@ -109,9 +110,7 @@ class Pluggy:
                 return
             page += 1
 
-    def cursored(
-        self, path: str, query: str, hop_limit: int = 500
-    ) -> Iterator[dict[str, Any]]:
+    def cursored(self, path: str, query: str, hop_limit: int = 500) -> Iterator[dict[str, Any]]:
         """The cursor style used by /v2/transactions.
 
         `next` comes back as a query string relative to the endpoint
@@ -254,9 +253,7 @@ def sync() -> int:
     client_id = os.environ.get("PLUGGY_CLIENT_ID")
     client_secret = os.environ.get("PLUGGY_CLIENT_SECRET")
     item_ids = [
-        i.strip()
-        for i in (os.environ.get("PLUGGY_ITEM_IDS") or "").split(",")
-        if i.strip()
+        i.strip() for i in (os.environ.get("PLUGGY_ITEM_IDS") or "").split(",") if i.strip()
     ]
 
     missing = [
@@ -285,7 +282,8 @@ def sync() -> int:
 
     def probe(path: str, status: int, rows: int, note: str = "") -> None:
         db.execute(
-            "INSERT INTO probes (run_id, path, status, rows, note, fetched_at) VALUES (?,?,?,?,?,?)",
+            "INSERT INTO probes (run_id, path, status, rows, note, fetched_at)"
+            " VALUES (?,?,?,?,?,?)",
             (run_id, path, status, rows, note, utcnow()),
         )
 
@@ -412,9 +410,7 @@ def sync() -> int:
                 account,
             )
 
-            transactions = list(
-                api.cursored("/v2/transactions", f"?accountId={account_id}")
-            )
+            transactions = list(api.cursored("/v2/transactions", f"?accountId={account_id}"))
             for row in transactions:
                 upsert(
                     db,
@@ -444,8 +440,7 @@ def sync() -> int:
                             "id": row.get("id"),
                             "account_id": account_id,
                             "due_date": row.get("dueDate"),
-                            "closing_date": row.get("closeDate")
-                            or row.get("closingDate"),
+                            "closing_date": row.get("closeDate") or row.get("closingDate"),
                             "total_amount": row.get("totalAmount"),
                             "minimum_payment": row.get("minimumPaymentAmount"),
                         },

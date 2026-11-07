@@ -12,7 +12,7 @@ from unittest import mock
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import pluggy_sync  # noqa: E402
+import pluggy_sync  # noqa: E402  (sys.path is set just above)
 
 
 class MissingConfigurationTest(unittest.TestCase):
