@@ -26,6 +26,7 @@ EXPECTED_QUERIES = {
     "unresolved_list",
     "not_covered_list",
     "pending_pairs",
+    "caixinha_yield",
 }
 
 
