@@ -23,7 +23,9 @@ from datetime import datetime, timezone
 from typing import Any, Iterator
 
 BASE = "https://api.pluggy.ai"
-DB_PATH = os.environ.get("PLUGGY_DB", os.path.join(os.path.dirname(os.path.abspath(__file__)), "pluggy.db"))
+DB_PATH = os.environ.get(
+    "PLUGGY_DB", os.path.join(os.path.dirname(os.path.abspath(__file__)), "pluggy.db")
+)
 
 # Pluggy documents 360 requests/minute per IP; a prior implementation hardcoded
 # 360/hour and the disagreement was never settled. Sequential requests with a
@@ -47,7 +49,10 @@ class Pluggy:
     def _authenticate(self) -> str:
         body = json.dumps(self._credentials).encode()
         request = urllib.request.Request(
-            f"{BASE}/auth", data=body, headers={"content-type": "application/json"}, method="POST"
+            f"{BASE}/auth",
+            data=body,
+            headers={"content-type": "application/json"},
+            method="POST",
         )
         with urllib.request.urlopen(request, timeout=60) as response:
             return json.load(response)["apiKey"]
@@ -77,7 +82,7 @@ class Pluggy:
                     continue
                 if error.code == 429 and attempt < retries - 1:
                     wait = int(error.headers.get("retry-after") or 60)
-                    print(f"    429, aguardando {wait}s", file=sys.stderr)
+                    print(f"    429, waiting {wait}s", file=sys.stderr)
                     time.sleep(wait)
                     continue
                 try:
@@ -86,7 +91,7 @@ class Pluggy:
                     return error.code, {"body": payload.decode("utf8", "replace")}
             except urllib.error.URLError as error:
                 if attempt < retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                     continue
                 return 0, {"error": str(error)}
         return 0, {"error": "retries exhausted"}
@@ -104,7 +109,9 @@ class Pluggy:
                 return
             page += 1
 
-    def cursored(self, path: str, query: str, hop_limit: int = 500) -> Iterator[dict[str, Any]]:
+    def cursored(
+        self, path: str, query: str, hop_limit: int = 500
+    ) -> Iterator[dict[str, Any]]:
         """The cursor style used by /v2/transactions.
 
         `next` comes back as a query string relative to the endpoint
@@ -118,14 +125,17 @@ class Pluggy:
             if status != 200 or not isinstance(body, dict):
                 # A mid-walk refusal truncates the history, and a truncation
                 # that prints nothing is indistinguishable from a short account.
-                print(f"    ! walk interrompido em {path} hop {hop}: HTTP {status}", file=sys.stderr)
+                print(
+                    f"    ! walk cut short at {path} hop {hop}: HTTP {status}",
+                    file=sys.stderr,
+                )
                 return
             yield from body.get("results", [])
             nxt = body.get("next")
             if not nxt or nxt == query:
                 return
             query = nxt
-        print(f"    ! {path} excedeu {hop_limit} páginas", file=sys.stderr)
+        print(f"    ! {path} exceeded {hop_limit} pages", file=sys.stderr)
 
 
 SCHEMA = """
@@ -213,8 +223,14 @@ CREATE TABLE IF NOT EXISTS categories (
 """
 
 
-def upsert(db: sqlite3.Connection, table: str, columns: dict[str, Any], row: dict[str, Any]) -> None:
-    columns = {**columns, "raw": json.dumps(row, ensure_ascii=False), "fetched_at": utcnow()}
+def upsert(
+    db: sqlite3.Connection, table: str, columns: dict[str, Any], row: dict[str, Any]
+) -> None:
+    columns = {
+        **columns,
+        "raw": json.dumps(row, ensure_ascii=False),
+        "fetched_at": utcnow(),
+    }
     names = ", ".join(columns)
     marks = ", ".join("?" for _ in columns)
     updates = ", ".join(f"{name}=excluded.{name}" for name in columns if name != "id")
@@ -237,7 +253,11 @@ def dig(row: dict[str, Any], *path: str) -> Any:
 def sync() -> int:
     client_id = os.environ.get("PLUGGY_CLIENT_ID")
     client_secret = os.environ.get("PLUGGY_CLIENT_SECRET")
-    item_ids = [i.strip() for i in (os.environ.get("PLUGGY_ITEM_IDS") or "").split(",") if i.strip()]
+    item_ids = [
+        i.strip()
+        for i in (os.environ.get("PLUGGY_ITEM_IDS") or "").split(",")
+        if i.strip()
+    ]
 
     missing = [
         name
@@ -249,7 +269,10 @@ def sync() -> int:
         if not value
     ]
     if missing:
-        print(f"faltando no ambiente: {', '.join(missing)}", file=sys.stderr)
+        print(
+            f"missing in the environment: {', '.join(missing)} (see README: Running it)",
+            file=sys.stderr,
+        )
         return 2
 
     db = sqlite3.connect(DB_PATH)
@@ -266,124 +289,172 @@ def sync() -> int:
             (run_id, path, status, rows, note, utcnow()),
         )
 
-    print(f"banco: {DB_PATH}")
+    print(f"database: {DB_PATH}")
 
     # The category tree is global rather than per-connection.
     status, body = api.get("/categories?pageSize=500")
     rows = body.get("results", []) if isinstance(body, dict) else []
     for row in rows:
-        upsert(db, "categories", {
-            "id": row.get("id"),
-            "description": row.get("description"),
-            "parent_id": row.get("parentId"),
-        }, row)
+        upsert(
+            db,
+            "categories",
+            {
+                "id": row.get("id"),
+                "description": row.get("description"),
+                "parent_id": row.get("parentId"),
+            },
+            row,
+        )
     probe("/categories", status, len(rows))
-    print(f"categorias: {len(rows)}")
+    print(f"categories: {len(rows)}")
 
     for item_id in item_ids:
-        print(f"\n── conexão {item_id}")
+        print(f"\n── connection {item_id}")
 
         status, item = api.get(f"/items/{item_id}")
         probe(f"/items/{item_id}", status, 1 if status == 200 else 0)
         if status != 200:
-            print(f"   ✗ HTTP {status} — pulando")
+            print(f"   ✗ HTTP {status}, skipped")
             continue
 
-        upsert(db, "items", {
-            "id": item.get("id"),
-            "connector": dig(item, "connector", "name"),
-            "status": item.get("status"),
-            "execution_status": item.get("executionStatus"),
-            "last_updated": item.get("lastUpdatedAt"),
-            "next_auto_sync": item.get("nextAutoSyncAt"),
-        }, item)
+        upsert(
+            db,
+            "items",
+            {
+                "id": item.get("id"),
+                "connector": dig(item, "connector", "name"),
+                "status": item.get("status"),
+                "execution_status": item.get("executionStatus"),
+                "last_updated": item.get("lastUpdatedAt"),
+                "next_auto_sync": item.get("nextAutoSyncAt"),
+            },
+            item,
+        )
         print(f"   {dig(item, 'connector', 'name')} — {item.get('status')}")
 
         for row in api.paged(f"/consents?itemId={item_id}"):
-            upsert(db, "consents", {
-                "id": row.get("id"),
-                "item_id": item_id,
-                "expires_at": row.get("expiresAt"),
-                "revoked_at": row.get("revokedAt"),
-            }, row)
+            upsert(
+                db,
+                "consents",
+                {
+                    "id": row.get("id"),
+                    "item_id": item_id,
+                    "expires_at": row.get("expiresAt"),
+                    "revoked_at": row.get("revokedAt"),
+                },
+                row,
+            )
 
         status, identity = api.get(f"/identity?itemId={item_id}")
         if status == 200 and isinstance(identity, dict) and identity.get("id"):
-            upsert(db, "identities", {
-                "id": identity.get("id"),
-                "item_id": item_id,
-                "document": identity.get("document"),
-                "full_name": identity.get("fullName"),
-            }, identity)
+            upsert(
+                db,
+                "identities",
+                {
+                    "id": identity.get("id"),
+                    "item_id": item_id,
+                    "document": identity.get("document"),
+                    "full_name": identity.get("fullName"),
+                },
+                identity,
+            )
         probe(f"/identity?itemId={item_id}", status, 1 if status == 200 else 0)
 
         investments = list(api.paged(f"/investments?itemId={item_id}"))
         for row in investments:
-            upsert(db, "investments", {
-                "id": row.get("id"),
-                "item_id": item_id,
-                "type": row.get("type"),
-                "subtype": row.get("subtype"),
-                "name": row.get("name"),
-                "balance": row.get("balance"),
-                "currency": row.get("currencyCode"),
-            }, row)
+            upsert(
+                db,
+                "investments",
+                {
+                    "id": row.get("id"),
+                    "item_id": item_id,
+                    "type": row.get("type"),
+                    "subtype": row.get("subtype"),
+                    "name": row.get("name"),
+                    "balance": row.get("balance"),
+                    "currency": row.get("currencyCode"),
+                },
+                row,
+            )
             for tx in api.paged(f"/investments/{row.get('id')}/transactions"):
-                upsert(db, "investment_transactions", {
-                    "id": tx.get("id"),
-                    "investment_id": row.get("id"),
-                    "date": tx.get("date"),
-                    "amount": tx.get("amount"),
-                }, tx)
+                upsert(
+                    db,
+                    "investment_transactions",
+                    {
+                        "id": tx.get("id"),
+                        "investment_id": row.get("id"),
+                        "date": tx.get("date"),
+                        "amount": tx.get("amount"),
+                    },
+                    tx,
+                )
         probe(f"/investments?itemId={item_id}", 200, len(investments))
         if investments:
-            print(f"   investimentos: {len(investments)}")
+            print(f"   investments: {len(investments)}")
 
         accounts = list(api.paged(f"/accounts?itemId={item_id}"))
         probe(f"/accounts?itemId={item_id}", 200, len(accounts))
 
         for account in accounts:
             account_id = account.get("id")
-            upsert(db, "accounts", {
-                "id": account_id,
-                "item_id": item_id,
-                "type": account.get("type"),
-                "subtype": account.get("subtype"),
-                "name": account.get("name"),
-                "balance": account.get("balance"),
-                "currency": account.get("currencyCode"),
-            }, account)
+            upsert(
+                db,
+                "accounts",
+                {
+                    "id": account_id,
+                    "item_id": item_id,
+                    "type": account.get("type"),
+                    "subtype": account.get("subtype"),
+                    "name": account.get("name"),
+                    "balance": account.get("balance"),
+                    "currency": account.get("currencyCode"),
+                },
+                account,
+            )
 
-            transactions = list(api.cursored("/v2/transactions", f"?accountId={account_id}"))
+            transactions = list(
+                api.cursored("/v2/transactions", f"?accountId={account_id}")
+            )
             for row in transactions:
-                upsert(db, "transactions", {
-                    "id": row.get("id"),
-                    "account_id": account_id,
-                    "date": row.get("date"),
-                    "description": row.get("description"),
-                    "amount": row.get("amount"),
-                    "currency": row.get("currencyCode"),
-                    "type": row.get("type"),
-                    "category": row.get("category"),
-                }, row)
+                upsert(
+                    db,
+                    "transactions",
+                    {
+                        "id": row.get("id"),
+                        "account_id": account_id,
+                        "date": row.get("date"),
+                        "description": row.get("description"),
+                        "amount": row.get("amount"),
+                        "currency": row.get("currencyCode"),
+                        "type": row.get("type"),
+                        "category": row.get("category"),
+                    },
+                    row,
+                )
             probe(f"/v2/transactions?accountId={account_id}", 200, len(transactions))
 
             bills = []
             if account.get("type") == "CREDIT":
                 bills = list(api.paged(f"/bills?accountId={account_id}"))
                 for row in bills:
-                    upsert(db, "bills", {
-                        "id": row.get("id"),
-                        "account_id": account_id,
-                        "due_date": row.get("dueDate"),
-                        "closing_date": row.get("closeDate") or row.get("closingDate"),
-                        "total_amount": row.get("totalAmount"),
-                        "minimum_payment": row.get("minimumPaymentAmount"),
-                    }, row)
+                    upsert(
+                        db,
+                        "bills",
+                        {
+                            "id": row.get("id"),
+                            "account_id": account_id,
+                            "due_date": row.get("dueDate"),
+                            "closing_date": row.get("closeDate")
+                            or row.get("closingDate"),
+                            "total_amount": row.get("totalAmount"),
+                            "minimum_payment": row.get("minimumPaymentAmount"),
+                        },
+                        row,
+                    )
                 probe(f"/bills?accountId={account_id}", 200, len(bills))
 
-            extra = f", {len(bills)} faturas" if bills else ""
-            print(f"   {account.get('name')}: {len(transactions)} transações{extra}")
+            extra = f", {len(bills)} bills" if bills else ""
+            print(f"   {account.get('name')}: {len(transactions)} transactions{extra}")
 
         db.commit()
 
@@ -393,9 +464,18 @@ def sync() -> int:
     )
     db.commit()
 
-    print(f"\n{api.calls} chamadas à API")
-    for table in ("items", "accounts", "transactions", "bills", "investments",
-                  "investment_transactions", "consents", "identities", "categories"):
+    print(f"\n{api.calls} API calls")
+    for table in (
+        "items",
+        "accounts",
+        "transactions",
+        "bills",
+        "investments",
+        "investment_transactions",
+        "consents",
+        "identities",
+        "categories",
+    ):
         count = db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
         print(f"  {table:26} {count}")
 
