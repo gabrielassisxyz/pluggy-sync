@@ -17,7 +17,8 @@ import filecmp
 import os
 import sqlite3
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -239,6 +240,22 @@ def connect(path: str) -> sqlite3.Connection:
     connection.execute("PRAGMA foreign_keys=ON")
     connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     return connection
+
+
+@contextmanager
+def transaction(connection: sqlite3.Connection) -> Iterator[None]:
+    """BEGIN IMMEDIATE / COMMIT, ROLLBACK on any exception. Inside an open
+    transaction it joins it: the outer scope owns the commit."""
+    if connection.in_transaction:
+        yield
+        return
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        connection.execute("ROLLBACK")
+        raise
+    connection.execute("COMMIT")
 
 
 # -- migrations -------------------------------------------------------------
