@@ -2,3 +2,6 @@ pluggy.db
 pluggy.db-*
 __pycache__/
 *.pyc
+
+# bv (beads viewer) local config and caches
+.bv/
