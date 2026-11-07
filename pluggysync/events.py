@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .dates import DATE_FIELDS, business_date
+from .projections import PROJECTION_NAMES, project_documents
 
 PARENT_OF = {
     "transactions": "accounts",
@@ -374,6 +375,7 @@ def project_run(connection: sqlite3.Connection, run_id: int) -> dict[int, tuple[
     observed = projector.sightings()
     removed = projector.disappearance(observed)
     projector.propagation(observed, removed)
+    project_documents(connection, run_id)
     projector.checkpoint()
     return projector.ambiguous
 
@@ -401,10 +403,14 @@ def project_pending_runs(
     return projected
 
 
-def rebuild_projection(connection: sqlite3.Connection) -> list[int]:
+def rebuild_projection(
+    connection: sqlite3.Connection, crash_at: Callable[..., None] | None = None
+) -> list[int]:
     """Clears layer 3 and projects every terminal run again, in id order."""
-    for table in ("events", "ambiguities", "document_state", "projection_state"):
+    for table in ("events", "ambiguities", "document_state", "projection_state", *PROJECTION_NAMES):
         connection.execute(f"DELETE FROM {table}")
+    if crash_at is not None:
+        crash_at("after_clearing")
     runs = [
         int(run_id)
         for (run_id,) in connection.execute(

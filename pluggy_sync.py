@@ -417,4 +417,6 @@ def sync() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(sync())
+    from pluggysync.cli import main
+
+    sys.exit(main(sys.argv[1:]))

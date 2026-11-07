@@ -24,6 +24,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from .coverage import SCOPE_COVERAGE_VIEW
+from .projections import PROJECTION_TABLES
+from .views import VIEWS
 
 LOCAL_ZONE = ZoneInfo("America/Sao_Paulo")
 BUSY_TIMEOUT_MS = 5000
@@ -221,6 +223,7 @@ SCHEMA_V1: list[str] = [
   from_states    TEXT NOT NULL,
   acceptance_run INTEGER REFERENCES runs(id)
 )""",
+    *PROJECTION_TABLES,
     *[statement for table in APPEND_ONLY_TABLES for statement in _append_only_triggers(table)],
     "CREATE TRIGGER runs_no_delete BEFORE DELETE ON runs"
     " BEGIN SELECT RAISE(ABORT, 'runs rows are never deleted'); END",
@@ -248,6 +251,7 @@ WHEN OLD.outcome <> 'pending'
 BEGIN
   SELECT RAISE(ABORT, 'scopes: only the terminal fields may change, and only while pending');
 END""",
+    *VIEWS,
 ]
 
 
