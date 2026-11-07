@@ -54,6 +54,7 @@ class HandBuilt:
         infer_absence: int | None = None,
         min_date: str | None = None,
         rows: int = 0,
+        min_instant: str | None = None,
     ) -> int:
         at = self.db.execute("SELECT finished_at FROM runs WHERE id = ?", (run_id,)).fetchone()[0]
         if infer_absence is None:
@@ -61,7 +62,8 @@ class HandBuilt:
         with transaction(self.db):
             cursor = self.db.execute(
                 "INSERT INTO scopes (run_id, kind, parent, expected, outcome, infer_absence,"
-                " status, rows, min_date, closed_at, closed_day) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                " status, rows, min_date, min_instant, closed_at, closed_day)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     run_id,
                     kind,
@@ -72,6 +74,7 @@ class HandBuilt:
                     200,
                     rows,
                     min_date,
+                    min_instant,
                     at,
                     local_day(at),
                 ),

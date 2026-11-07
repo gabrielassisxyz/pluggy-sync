@@ -16,9 +16,18 @@ from pluggysync.check import _moved_problems, check_file
 from pluggysync.cli import main
 from pluggysync.ledger import SCHEMA_V1
 from pluggysync.reparse import ReparseRefused, reparse
+from pluggysync.walk import BASE
+from tests.fakes import ok
 from tests.fixtures.hand_built import HandBuilt
-from tests.fixtures.ledger_run import ACCOUNT_A1, ITEM_A, ITEM_B, LedgerHarness, script_two_items
-from tests.fixtures.pages import cursor_query
+from tests.fixtures.ledger_run import (
+    ACCOUNT_A1,
+    ITEM_A,
+    ITEM_B,
+    LedgerHarness,
+    script_two_items,
+    tx_doc,
+)
+from tests.fixtures.pages import cursor_page, cursor_query
 
 
 class Crash(BaseException):
@@ -39,6 +48,18 @@ class SweptScopeTest(unittest.TestCase):
         self.addCleanup(self.harness.close)
         transport = self.harness.transport()
         script_two_items(transport)
+        # A two-page cursor walk cut after page 1: the sweep closes it incomplete
+        # with the `swept: ` marker, the case a healthy file must survive.
+        first = f"{BASE}/v2/transactions{cursor_query(ACCOUNT_A1)}"
+        transport.script[first].clear()
+        second = cursor_query(ACCOUNT_A1, after="c1")
+        transport.answer(
+            f"/v2/transactions{cursor_query(ACCOUNT_A1)}",
+            ok(cursor_page([tx_doc("tx-a1-0001", ACCOUNT_A1)], second)),
+        )
+        transport.answer(
+            f"/v2/transactions{second}", ok(cursor_page([tx_doc("tx-a1-0002", ACCOUNT_A1)]))
+        )
         with self.assertRaises(Crash):
             self.harness.run(
                 transport, [ITEM_A, ITEM_B], crash_at=crash_on(cursor_query(ACCOUNT_A1))
@@ -48,7 +69,15 @@ class SweptScopeTest(unittest.TestCase):
         self.harness.connection.close()
 
     def test_a_database_with_a_swept_run_passes_the_check(self) -> None:
+        db = sqlite3.connect(f"file:{self.harness.path}?mode=ro", uri=True)
+        error = db.execute(
+            "SELECT error FROM scopes WHERE kind = 'transactions' AND parent = ?", (ACCOUNT_A1,)
+        ).fetchone()[0]
+        db.close()
+        self.assertTrue(error.startswith("swept: "), error)
+
         code, problems, _ = check_file(self.harness.path)
+
         self.assertEqual((code, problems), (0, []))
 
     def test_a_run_still_running_refuses_the_reparse(self) -> None:

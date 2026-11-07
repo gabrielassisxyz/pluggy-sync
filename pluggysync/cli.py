@@ -19,6 +19,7 @@ from collections.abc import Callable, Sequence
 from .check import check_file
 from .events import ProjectionBlocked
 from .ledger import LegacyDatabase, UnknownDatabase, open_ledger
+from .legacy_import import ImportFailed, import_states
 from .lock import LockHeld, LockRefused, ProcessLock
 from .rebuild import rebuild
 from .reparse import ReparseRefused, reparse
@@ -136,6 +137,35 @@ def ledger_sync(path: str, make_client: MakeClient | None, clock: Clock | None) 
         lock.release()
 
 
+def import_mode(path: str, state_paths: list[str]) -> int:
+    """The historical import: the frozen legacy states become the candidate's
+    first runs. A failed import leaves no candidate behind."""
+    existed = os.path.exists(path)
+    lock, connection = _open(path)
+    try:
+        report = import_states(connection, state_paths)
+        print(
+            f"{path}: imported {len(state_paths)} state(s): {report.runs} runs,"
+            f" {report.scopes} walks, {report.sightings} sightings of"
+            f" {report.documents} documents"
+        )
+        for remark in report.remarks:
+            print(f"  note: {remark}")
+        return 0
+    except ImportFailed:
+        connection.close()
+        lock.release()
+        if not existed:
+            os.unlink(path)
+        raise
+    finally:
+        try:
+            connection.close()
+        except sqlite3.ProgrammingError:
+            pass
+        lock.release()
+
+
 def rebuild_mode(path: str) -> int:
     lock, connection = _open(path)
     try:
@@ -200,8 +230,22 @@ def main(
         action="store_true",
         help="recompute local days under the current time rules during --reparse",
     )
+    parser.add_argument(
+        "--from-states",
+        metavar="STATE",
+        nargs="+",
+        help="with --candidate: build the candidate from these frozen legacy databases,"
+        " oldest first, instead of running a sync",
+    )
     args = parser.parse_args(argv)
-    if not any((args.candidate, args.rebuild, args.check, args.reparse, args.retime)):
+    if args.from_states and not args.candidate:
+        _say("--from-states needs --candidate <path>: the import never touches the live database")
+        return 2
+    if args.from_states and (args.check or args.reparse or args.rebuild):
+        _say("--from-states cannot be combined with --check, --reparse or --rebuild")
+        return 2
+    modes = (args.candidate, args.rebuild, args.check, args.reparse, args.retime, args.from_states)
+    if not any(modes):
         from pluggy_sync import sync  # the legacy path, until cutover
 
         return sync()
@@ -228,6 +272,8 @@ def main(
             if args.candidate
             else live_db_path()
         )
+        if args.from_states:
+            return import_mode(path, args.from_states)
         if args.check:
             return check_mode(path)
         if args.rebuild:
@@ -236,7 +282,14 @@ def main(
     except (CandidateRefused, ConfigurationError, ReparseRefused) as refused:
         _say(str(refused))
         return 2
-    except (LockHeld, LockRefused, LegacyDatabase, UnknownDatabase, ProjectionBlocked) as refused:
+    except (
+        LockHeld,
+        LockRefused,
+        LegacyDatabase,
+        UnknownDatabase,
+        ProjectionBlocked,
+        ImportFailed,
+    ) as refused:
         _say(str(refused))
         return 1
     except RuntimeError as failed:
