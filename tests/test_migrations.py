@@ -32,6 +32,14 @@ VERSION_2 = (*MIGRATIONS, Migration(2, add_notes_table))
 VERSION_2_FAILING = (*MIGRATIONS, Migration(2, add_notes_table_then_fail))
 
 
+def version_of(path: str) -> int:
+    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        return user_version(db)
+    finally:
+        db.close()
+
+
 def tables_of(path: str) -> set[str]:
     db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
@@ -66,10 +74,11 @@ class MigrationTest(unittest.TestCase):
         db = open_ledger(self.path, VERSION_2)
         db.close()
 
-        self.assertEqual(user_version(sqlite3.connect(self.path)), 2)
+        self.assertEqual(version_of(self.path), 2)
         self.assertIn("notes", tables_of(self.path))
         self.assertTrue(os.path.exists(self.backup))
         backup = sqlite3.connect(f"file:{self.backup}?mode=ro", uri=True)
+        self.addCleanup(backup.close)
         self.assertEqual(user_version(backup), 1)
         self.assertEqual(backup.execute("PRAGMA integrity_check").fetchone()[0], "ok")
         self.assertEqual(backup.execute("SELECT count(*) FROM runs").fetchone()[0], 1)
@@ -79,7 +88,7 @@ class MigrationTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             open_ledger(self.path, VERSION_2_FAILING)
 
-        self.assertEqual(user_version(sqlite3.connect(self.path)), 1)
+        self.assertEqual(version_of(self.path), 1)
         self.assertNotIn("notes", tables_of(self.path))
         self.assertTrue(os.path.exists(self.backup))
         first_inode = os.stat(self.backup).st_ino
@@ -87,7 +96,7 @@ class MigrationTest(unittest.TestCase):
         db = open_ledger(self.path, VERSION_2)
         db.close()
 
-        self.assertEqual(user_version(sqlite3.connect(self.path)), 2)
+        self.assertEqual(version_of(self.path), 2)
         self.assertEqual(os.stat(self.backup).st_ino, first_inode)
 
     def test_a_differing_file_at_the_backup_path_aborts_without_overwriting(self) -> None:
@@ -99,7 +108,7 @@ class MigrationTest(unittest.TestCase):
 
         with open(self.backup, "rb") as planted:
             self.assertEqual(planted.read(), b"not a backup")
-        self.assertEqual(user_version(sqlite3.connect(self.path)), 1)
+        self.assertEqual(version_of(self.path), 1)
 
     def test_a_file_appearing_between_check_and_publish_aborts_without_overwriting(self) -> None:
         def plant() -> None:
@@ -111,7 +120,7 @@ class MigrationTest(unittest.TestCase):
 
         with open(self.backup, "rb") as planted:
             self.assertEqual(planted.read(), b"raced in")
-        self.assertEqual(user_version(sqlite3.connect(self.path)), 1)
+        self.assertEqual(version_of(self.path), 1)
         self.assertEqual(
             sorted(os.listdir(self.directory.name)), ["ledger.db", os.path.basename(self.backup)]
         )
@@ -138,7 +147,7 @@ class MigrationTest(unittest.TestCase):
         db = open_ledger(fresh, VERSION_2)
         db.close()
 
-        self.assertEqual(user_version(sqlite3.connect(fresh)), 2)
+        self.assertEqual(version_of(fresh), 2)
         self.assertFalse(os.path.exists(backup_path(fresh, 1)))
         self.assertFalse(os.path.exists(backup_path(fresh, 2)))
 
