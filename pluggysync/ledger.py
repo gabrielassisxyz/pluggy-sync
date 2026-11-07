@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from .coverage import SCOPE_COVERAGE_VIEW
+
 LOCAL_ZONE = ZoneInfo("America/Sao_Paulo")
 BUSY_TIMEOUT_MS = 5000
 
@@ -197,6 +199,22 @@ SCHEMA_V1: list[str] = [
   projected_run INTEGER NOT NULL REFERENCES runs(id),
   code_version  TEXT NOT NULL
 )""",
+    # Layer 3, per document: the current state the events leave behind. Derived,
+    # rebuildable, and the source the per-kind current-state tables project from.
+    """CREATE TABLE document_state (
+  document_id    INTEGER PRIMARY KEY REFERENCES documents(id),
+  state          TEXT NOT NULL CHECK (state IN ('present','removed','parent_gone')),
+  first_seen_run INTEGER NOT NULL REFERENCES runs(id),
+  last_seen_run  INTEGER NOT NULL REFERENCES runs(id),
+  state_run      INTEGER NOT NULL REFERENCES runs(id),
+  ambiguous_run  INTEGER REFERENCES runs(id),
+  parent         TEXT NOT NULL,
+  sha256         TEXT NOT NULL REFERENCES versions(sha256),
+  observed_at    TEXT NOT NULL,
+  observed_day   TEXT NOT NULL
+)""",
+    "CREATE INDEX document_state_by_parent ON document_state(parent, state)",
+    SCOPE_COVERAGE_VIEW,
     """CREATE TABLE cutover (
   id             INTEGER PRIMARY KEY CHECK (id = 1),
   completed_at   TEXT NOT NULL,

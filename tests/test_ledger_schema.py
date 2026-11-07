@@ -37,8 +37,10 @@ EXPECTED_TABLES = {
     "cutover",
     "legacy_sync_runs",
     "legacy_probes",
+    "document_state",
 }
 EXPECTED_INDEXES = {
+    "document_state_by_parent",
     "observations_by_document",
     "observations_by_run",
     "observations_by_scope",
