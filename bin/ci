@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# The exact checks CI runs, runnable locally, so "green locally" means "green in CI".
+# Keep in step with .github/workflows/ci.yml.
+#
+# Every gate either runs or fails loudly: a missing tool is a failure that names its
+# install command, never a silent skip.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+fail=0
+
+need() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "missing: $1 (install with: $2)"
+    fail=1
+    return 1
+  fi
+}
+
+echo "==> secret scan (gitleaks, working tree)"
+if need gitleaks "https://github.com/gitleaks/gitleaks#installing"; then
+  gitleaks dir . --no-banner --redact || { echo "  FAILED: gitleaks"; fail=1; }
+fi
+
+echo "==> shell scripts lint clean (shellcheck)"
+if need shellcheck "https://www.shellcheck.net"; then
+  shellcheck bin/ci bin/install-hooks .githooks/pre-commit .githooks/commit-msg \
+    || { echo "  FAILED: shellcheck"; fail=1; }
+fi
+
+echo "==> python format and lint (ruff)"
+if need ruff "pip install ruff"; then
+  ruff format --check . || { echo "  FAILED: ruff format"; fail=1; }
+  ruff check . || { echo "  FAILED: ruff check"; fail=1; }
+fi
+
+echo "==> python compiles"
+python3 -m py_compile pluggy_sync.py || { echo "  FAILED: py_compile"; fail=1; }
+
+echo "==> tests (unittest)"
+# Python 3.12+ exits 5 when no test ran, so an empty suite is red, not green.
+python3 -m unittest discover -s tests -t . || { echo "  FAILED: unittest"; fail=1; }
+
+if [ "$fail" -ne 0 ]; then
+  echo "bin/ci FAILED"
+  exit 1
+fi
+echo "CI green."

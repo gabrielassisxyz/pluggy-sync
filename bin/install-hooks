@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Point git at the versioned hooks in .githooks/ (a raw .git/hooks/pre-commit is
+# not tracked and is lost on clone). Run once after cloning.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+git config core.hooksPath .githooks
+chmod +x .githooks/*
+
+# Keep the session note (post-commit) alive across history rewrites. Git keys
+# notes by commit sha and does NOT fire post-commit when a rebase replays a
+# commit — so without this a rebased commit silently loses its note, which would
+# quietly break the whole "trace a change back to its session" guarantee.
+# rewriteRef tells git to COPY the note onto the rewritten sha; overwrite mode
+# keeps it to a single line across repeated rewrites (vs. the default concatenate,
+# which would stack duplicate `session:` lines). In a repo with no post-commit
+# hook this is inert config — harmless, and ready if the hook arrives.
+git config notes.rewriteRef refs/notes/sessions
+git config notes.rewriteMode overwrite
+
+# The landing configuration the origin check reads before any push or merge this repository's
+# tools make (scripts/origin-check.sh). A missing file refuses every landing, on any repository,
+# by design, so it is installed here, in the one step every clone already runs, rather than
+# left to a by-hand step some machine or session skips. The installer never overwrites.
+# Conditional because this file is copied byte-identical into every repository under the
+# harness contract, and only one of them ships the installer; elsewhere the step is a no-op.
+if [ -x scripts/install-landing-config.sh ]; then
+    scripts/install-landing-config.sh
+fi
+
+echo "Hooks installed (core.hooksPath -> .githooks; session notes survive amend/rebase)."
