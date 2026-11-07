@@ -25,6 +25,9 @@
   is self-contained: implement from it, not from an external plan.
 - **Worktrees:** `bin/worktree new <type>/<kebab-desc>` before the first write; never
   work in the main tree. `bin/install-hooks` once after clone.
+- **Merging:** an agent merges its own pull request once `bin/ci` is green locally and
+  every check on the PR is green; nobody waits for a human to press merge. Work still goes
+  through a branch, atomic commits and a PR whose body carries the why.
 
 ## Scope (current)
 - **Current scope:** collect every resource the Pluggy API exposes for the configured
