@@ -7,7 +7,9 @@ convenience over the raw document, never a replacement for it. Provider-side
 enrichment (transaction categories above all) stops arriving when a plan
 changes, and a field dropped at capture time cannot be refetched afterwards.
 
-Stdlib only: no virtualenv, no install step, no lockfile to go stale.
+Stdlib only: no virtualenv, no install step, no lockfile to go stale. The HTTP
+walk lives in the `pluggysync` package beside this file; this is the entry
+point that maps its pages onto the tables.
 """
 
 from __future__ import annotations
@@ -16,125 +18,26 @@ import json
 import os
 import sqlite3
 import sys
-import time
-import urllib.error
-import urllib.request
-from collections.abc import Iterator
-from datetime import UTC, datetime
 from typing import Any
 
-BASE = "https://api.pluggy.ai"
+from pluggysync.transport import PageAttempt
+from pluggysync.walk import Client, FetchResult, utcnow
+
 DB_PATH = os.environ.get(
     "PLUGGY_DB", os.path.join(os.path.dirname(os.path.abspath(__file__)), "pluggy.db")
 )
 
-# Pluggy documents 360 requests/minute per IP; a prior implementation hardcoded
-# 360/hour and the disagreement was never settled. Sequential requests with a
-# small gap stay far below either reading, and batch processes against the API
-# are explicitly prohibited, so there is nothing to gain by going faster.
-REQUEST_GAP_SECONDS = 0.15
 
+class AttemptCounter:
+    """Stands in for the archive until the ledger lands: numbers the attempts,
+    which is what the `api_calls` column has always counted."""
 
-def utcnow() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    def __init__(self) -> None:
+        self.count = 0
 
-
-class Pluggy:
-    """Thin API client: authenticates, renews on 401, waits out a 429."""
-
-    def __init__(self, client_id: str, client_secret: str) -> None:
-        self._credentials = {"clientId": client_id, "clientSecret": client_secret}
-        self._key: str | None = None
-        self.calls = 0
-
-    def _authenticate(self) -> str:
-        body = json.dumps(self._credentials).encode()
-        request = urllib.request.Request(
-            f"{BASE}/auth",
-            data=body,
-            headers={"content-type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return json.load(response)["apiKey"]
-
-    def key(self, force: bool = False) -> str:
-        if self._key is None or force:
-            self._key = self._authenticate()
-        return self._key
-
-    def get(self, path: str, retries: int = 3) -> tuple[int, Any]:
-        """Returns (status, parsed body). A non-200 is a value, not an exception:
-        several endpoints exist only for some connectors and answering "this one
-        is not available here" is part of the survey."""
-        url = path if path.startswith("http") else f"{BASE}{path}"
-
-        for attempt in range(retries):
-            time.sleep(REQUEST_GAP_SECONDS)
-            self.calls += 1
-            request = urllib.request.Request(url, headers={"X-API-KEY": self.key()})
-            try:
-                with urllib.request.urlopen(request, timeout=120) as response:
-                    return response.status, json.load(response)
-            except urllib.error.HTTPError as error:
-                payload = error.read()
-                if error.code == 401 and attempt < retries - 1:
-                    self.key(force=True)
-                    continue
-                if error.code == 429 and attempt < retries - 1:
-                    wait = int(error.headers.get("retry-after") or 60)
-                    print(f"    429, waiting {wait}s", file=sys.stderr)
-                    time.sleep(wait)
-                    continue
-                try:
-                    return error.code, json.loads(payload)
-                except ValueError:
-                    return error.code, {"body": payload.decode("utf8", "replace")}
-            except urllib.error.URLError as error:
-                if attempt < retries - 1:
-                    time.sleep(2**attempt)
-                    continue
-                return 0, {"error": str(error)}
-        return 0, {"error": "retries exhausted"}
-
-    def paged(self, path: str) -> Iterator[dict[str, Any]]:
-        """The page/totalPages style used by accounts, bills and investments."""
-        joiner = "&" if "?" in path else "?"
-        page = 1
-        while True:
-            status, body = self.get(f"{path}{joiner}pageSize=500&page={page}")
-            if status != 200 or not isinstance(body, dict):
-                return
-            yield from body.get("results", [])
-            if page >= int(body.get("totalPages") or 1):
-                return
-            page += 1
-
-    def cursored(self, path: str, query: str, hop_limit: int = 500) -> Iterator[dict[str, Any]]:
-        """The cursor style used by /v2/transactions.
-
-        `next` comes back as a query string relative to the endpoint
-        (`?accountId=...&after=...`), so the path has to be prepended to it --
-        sending it as a URL of its own silently hits the API root and ends the
-        walk at whatever had already been read. Stops on a cursor that fails to
-        advance, which would otherwise loop forever.
-        """
-        for hop in range(hop_limit):
-            status, body = self.get(f"{path}{query}")
-            if status != 200 or not isinstance(body, dict):
-                # A mid-walk refusal truncates the history, and a truncation
-                # that prints nothing is indistinguishable from a short account.
-                print(
-                    f"    ! walk cut short at {path} hop {hop}: HTTP {status}",
-                    file=sys.stderr,
-                )
-                return
-            yield from body.get("results", [])
-            nxt = body.get("next")
-            if not nxt or nxt == query:
-                return
-            query = nxt
-        print(f"    ! {path} exceeded {hop_limit} pages", file=sys.stderr)
+    def __call__(self, attempt: PageAttempt) -> int:
+        self.count += 1
+        return self.count
 
 
 SCHEMA = """
@@ -249,6 +152,21 @@ def dig(row: dict[str, Any], *path: str) -> Any:
     return row
 
 
+def outcome_note(result: FetchResult) -> str:
+    if result.outcome == "complete":
+        return ""
+    if result.outcome == "unavailable":
+        return "unavailable"
+    return f"incomplete: {result.error}"
+
+
+def report(path: str, result: FetchResult) -> None:
+    """A walk that stopped short is said out loud: silence here is what used
+    to make a truncated history look like a short account."""
+    if result.outcome == "incomplete":
+        print(f"   ! {path}: incomplete ({result.error})", file=sys.stderr)
+
+
 def sync() -> int:
     client_id = os.environ.get("PLUGGY_CLIENT_ID")
     client_secret = os.environ.get("PLUGGY_CLIENT_SECRET")
@@ -274,25 +192,26 @@ def sync() -> int:
 
     db = sqlite3.connect(DB_PATH)
     db.executescript(SCHEMA)
-    api = Pluggy(client_id, client_secret)
+    attempts = AttemptCounter()
+    api = Client(client_id, client_secret, on_attempt=attempts)
 
     started = utcnow()
     cursor = db.execute("INSERT INTO sync_runs (started_at) VALUES (?)", (started,))
     run_id = cursor.lastrowid
 
-    def probe(path: str, status: int, rows: int, note: str = "") -> None:
+    def probe(path: str, result: FetchResult, rows: int) -> None:
         db.execute(
             "INSERT INTO probes (run_id, path, status, rows, note, fetched_at)"
             " VALUES (?,?,?,?,?,?)",
-            (run_id, path, status, rows, note, utcnow()),
+            (run_id, path, result.status, rows, outcome_note(result), utcnow()),
         )
+        report(path, result)
 
     print(f"database: {DB_PATH}")
 
     # The category tree is global rather than per-connection.
-    status, body = api.get("/categories?pageSize=500")
-    rows = body.get("results", []) if isinstance(body, dict) else []
-    for row in rows:
+    categories = api.paged("/categories")
+    for row in categories.documents:
         upsert(
             db,
             "categories",
@@ -303,17 +222,18 @@ def sync() -> int:
             },
             row,
         )
-    probe("/categories", status, len(rows))
-    print(f"categories: {len(rows)}")
+    probe("/categories", categories, len(categories.documents))
+    print(f"categories: {len(categories.documents)}")
 
     for item_id in item_ids:
         print(f"\n── connection {item_id}")
 
-        status, item = api.get(f"/items/{item_id}")
-        probe(f"/items/{item_id}", status, 1 if status == 200 else 0)
-        if status != 200:
-            print(f"   ✗ HTTP {status}, skipped")
+        item_result = api.single(f"/items/{item_id}", expected_id=item_id)
+        probe(f"/items/{item_id}", item_result, len(item_result.documents))
+        if item_result.outcome != "complete":
+            print(f"   ✗ HTTP {item_result.status}, skipped")
             continue
+        item = item_result.documents[0]
 
         upsert(
             db,
@@ -330,7 +250,9 @@ def sync() -> int:
         )
         print(f"   {dig(item, 'connector', 'name')} — {item.get('status')}")
 
-        for row in api.paged(f"/consents?itemId={item_id}"):
+        consents = api.paged(f"/consents?itemId={item_id}")
+        report(f"/consents?itemId={item_id}", consents)
+        for row in consents.documents:
             upsert(
                 db,
                 "consents",
@@ -343,23 +265,23 @@ def sync() -> int:
                 row,
             )
 
-        status, identity = api.get(f"/identity?itemId={item_id}")
-        if status == 200 and isinstance(identity, dict) and identity.get("id"):
+        identity = api.single(f"/identity?itemId={item_id}")
+        for row in identity.documents:
             upsert(
                 db,
                 "identities",
                 {
-                    "id": identity.get("id"),
+                    "id": row.get("id"),
                     "item_id": item_id,
-                    "document": identity.get("document"),
-                    "full_name": identity.get("fullName"),
+                    "document": row.get("document"),
+                    "full_name": row.get("fullName"),
                 },
-                identity,
+                row,
             )
-        probe(f"/identity?itemId={item_id}", status, 1 if status == 200 else 0)
+        probe(f"/identity?itemId={item_id}", identity, len(identity.documents))
 
-        investments = list(api.paged(f"/investments?itemId={item_id}"))
-        for row in investments:
+        investments = api.paged(f"/investments?itemId={item_id}")
+        for row in investments.documents:
             upsert(
                 db,
                 "investments",
@@ -374,7 +296,9 @@ def sync() -> int:
                 },
                 row,
             )
-            for tx in api.paged(f"/investments/{row.get('id')}/transactions"):
+            movements = api.paged(f"/investments/{row.get('id')}/transactions")
+            report(f"/investments/{row.get('id')}/transactions", movements)
+            for tx in movements.documents:
                 upsert(
                     db,
                     "investment_transactions",
@@ -386,14 +310,14 @@ def sync() -> int:
                     },
                     tx,
                 )
-        probe(f"/investments?itemId={item_id}", 200, len(investments))
-        if investments:
-            print(f"   investments: {len(investments)}")
+        probe(f"/investments?itemId={item_id}", investments, len(investments.documents))
+        if investments.documents:
+            print(f"   investments: {len(investments.documents)}")
 
-        accounts = list(api.paged(f"/accounts?itemId={item_id}"))
-        probe(f"/accounts?itemId={item_id}", 200, len(accounts))
+        accounts = api.paged(f"/accounts?itemId={item_id}")
+        probe(f"/accounts?itemId={item_id}", accounts, len(accounts.documents))
 
-        for account in accounts:
+        for account in accounts.documents:
             account_id = account.get("id")
             upsert(
                 db,
@@ -410,8 +334,8 @@ def sync() -> int:
                 account,
             )
 
-            transactions = list(api.cursored("/v2/transactions", f"?accountId={account_id}"))
-            for row in transactions:
+            transactions = api.cursored("/v2/transactions", f"?accountId={account_id}")
+            for row in transactions.documents:
                 upsert(
                     db,
                     "transactions",
@@ -427,11 +351,16 @@ def sync() -> int:
                     },
                     row,
                 )
-            probe(f"/v2/transactions?accountId={account_id}", 200, len(transactions))
+            probe(
+                f"/v2/transactions?accountId={account_id}",
+                transactions,
+                len(transactions.documents),
+            )
 
-            bills = []
+            bills: list[dict[str, Any]] = []
             if account.get("type") == "CREDIT":
-                bills = list(api.paged(f"/bills?accountId={account_id}"))
+                bill_walk = api.paged(f"/bills?accountId={account_id}")
+                bills = bill_walk.documents
                 for row in bills:
                     upsert(
                         db,
@@ -446,20 +375,20 @@ def sync() -> int:
                         },
                         row,
                     )
-                probe(f"/bills?accountId={account_id}", 200, len(bills))
+                probe(f"/bills?accountId={account_id}", bill_walk, len(bills))
 
             extra = f", {len(bills)} bills" if bills else ""
-            print(f"   {account.get('name')}: {len(transactions)} transactions{extra}")
+            print(f"   {account.get('name')}: {len(transactions.documents)} transactions{extra}")
 
         db.commit()
 
     db.execute(
         "UPDATE sync_runs SET finished_at=?, api_calls=? WHERE id=?",
-        (utcnow(), api.calls, run_id),
+        (utcnow(), attempts.count, run_id),
     )
     db.commit()
 
-    print(f"\n{api.calls} API calls")
+    print(f"\n{attempts.count} API calls")
     for table in (
         "items",
         "accounts",

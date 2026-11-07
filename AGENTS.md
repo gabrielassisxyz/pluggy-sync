@@ -15,6 +15,9 @@
 
 ## Stack & Commands
 - **Stack:** Python 3.12+, standard library only. No install step, no lockfile.
+- **Layout:** `pluggy_sync.py` is the entry point and the table mapping; the HTTP walk
+  lives in `pluggysync/` (`transport.py` fetches bytes and never raises, `walk.py` turns
+  them into pages and an outcome). Every attempt reaches `on_attempt` before parsing.
 - **Run:** `./pluggy_sync.py` with `PLUGGY_CLIENT_ID`, `PLUGGY_CLIENT_SECRET`,
   `PLUGGY_ITEM_IDS` in the environment (`PLUGGY_DB` optional). Read-only against the
   API; it writes one SQLite file.
@@ -183,7 +186,6 @@
 
 | hurdle | class | gate |
 |---|---|---|
-| `/v2/transactions` returns `next` as a relative query string (`?accountId=…&after=…`); sent as a URL of its own it hits the API root and the walk ends early with no error | prose | none yet (a test in the walk contract bead) |
 | Pluggy publishes no endpoint that lists connections; an item id not in `PLUGGY_ITEM_IDS` is invisible | prose | none |
 | `PATCH /items/{id}` (refresh on demand) is refused on the MeuPluggy connector; freshness is the provider's own daily sync | prose | none |
 | Python 3.12+ `unittest` exits 5 when no test ran; an empty `tests/` is a red gate, not a green one | ci | `bin/ci` |
