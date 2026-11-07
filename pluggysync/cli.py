@@ -19,7 +19,7 @@ from collections.abc import Callable, Sequence
 from .check import check_file
 from .events import ProjectionBlocked
 from .ledger import LegacyDatabase, UnknownDatabase, open_ledger
-from .lock import LockHeld, ProcessLock
+from .lock import LockHeld, LockRefused, ProcessLock
 from .rebuild import rebuild
 from .reparse import ReparseRefused, reparse
 from .run import ConfigurationError, LedgerRun, code_version, parse_item_ids
@@ -201,7 +201,7 @@ def main(
         help="recompute local days under the current time rules during --reparse",
     )
     args = parser.parse_args(argv)
-    if not args.candidate and not args.rebuild and not args.check and not args.reparse:
+    if not any((args.candidate, args.rebuild, args.check, args.reparse, args.retime)):
         from pluggy_sync import sync  # the legacy path, until cutover
 
         return sync()
@@ -236,7 +236,7 @@ def main(
     except (CandidateRefused, ConfigurationError, ReparseRefused) as refused:
         _say(str(refused))
         return 2
-    except (LockHeld, LegacyDatabase, UnknownDatabase, ProjectionBlocked) as refused:
+    except (LockHeld, LockRefused, LegacyDatabase, UnknownDatabase, ProjectionBlocked) as refused:
         _say(str(refused))
         return 1
     except RuntimeError as failed:

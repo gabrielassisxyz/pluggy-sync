@@ -18,10 +18,10 @@ from typing import Any
 from .archive import archived_responses
 from .derive import canonical, page_is_valid, page_meta
 from .ledger import SCHEMA_VERSION, local_day, open_ledger
-from .lock import LockHeld, ProcessLock
+from .lock import LockHeld, LockRefused, ProcessLock
 from .projections import PROJECTION_NAMES
 from .replay import replay_walk
-from .run import self_check, url_matches_scope
+from .run import SWEPT, self_check, url_matches_scope
 from .walk import FetchResult
 
 
@@ -211,7 +211,6 @@ def check_connection(connection: sqlite3.Connection) -> tuple[list[str], list[st
             "min_date",
             "min_instant",
             "closed_at",
-            "closed_day",
             "error",
         ):
             stored = {
@@ -223,7 +222,9 @@ def check_connection(connection: sqlite3.Connection) -> tuple[list[str], list[st
                 "min_instant": min_instant,
                 "closed_at": closed_at,
                 "closed_day": closed_day,
-                "error": error,
+                # A scope the recovery sweep closed carries the `swept: ` marker the
+                # live walk never writes; the replay cannot know a sweep happened.
+                "error": error.removeprefix(SWEPT) if isinstance(error, str) else error,
             }[field]
             if close[field] != stored:
                 problems.append(
@@ -442,6 +443,10 @@ def _moved_problems(connection: sqlite3.Connection, info: list[str]) -> list[str
     ).fetchall()
     per_document: dict[int, list[tuple[int, str]]] = {}
     names: dict[int, str] = {}
+    ambiguous = {
+        (int(r), int(d))
+        for r, d in connection.execute("SELECT run_id, document_id FROM ambiguities")
+    }
     for document_id, provider_id, run_id, parent in rows:
         names[int(document_id)] = str(provider_id)
         per_document.setdefault(int(document_id), []).append((int(run_id), str(parent)))
@@ -454,7 +459,7 @@ def _moved_problems(connection: sqlite3.Connection, info: list[str]) -> list[str
         previous: str | None = None
         for run_id in sorted(by_run):
             parents = by_run[run_id]
-            if len(parents) != 1:
+            if len(parents) != 1 or (run_id, document_id) in ambiguous:
                 continue
             parent = parents[0]
             if previous is not None and parent != previous:
@@ -482,13 +487,13 @@ def check_file(path: str) -> tuple[int, list[str], list[str]]:
     Takes the shared lock first: a held writer lock reports "writer active"
     without reading a byte.
     """
+    if not os.path.exists(path):
+        return 1, [f"{path} does not exist"], []
     try:
         lock = ProcessLock.shared(path)
     except LockHeld:
         return 1, [f"writer active: another process holds {path}"], []
-    except FileNotFoundError:
-        return 1, [f"{path} does not exist"], []
-    except OSError as failure:
+    except (OSError, LockRefused) as failure:
         return 1, [f"cannot lock {path}: {failure}"], []
     try:
         if (os.stat(path).st_mode & 0o777) != 0o600:

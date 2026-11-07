@@ -21,7 +21,7 @@ from .derive import canonical, derive_page
 from .ledger import local_day, open_ledger, transaction
 from .lock import LockHeld, ProcessLock
 from .rebuild import rebuild
-from .run import CHILD_KINDS
+from .run import CHILD_KINDS, SWEPT
 
 CrashHook = Callable[..., None]
 
@@ -108,10 +108,17 @@ def reparse(
             old_outcomes = {
                 int(r[0]): str(r[1]) for r in source.execute("SELECT id, outcome FROM runs")
             }
+            still_running = [int(r[0]) for r in runs if str(r[5]) == "running"]
+            if still_running:
+                raise ReparseRefused(
+                    f"run {still_running[0]} is still running; run a sync so the recovery"
+                    " sweep closes it first"
+                )
+            scopes_with_responses = {int(r[2]) for r in response_rows_all}
             archived_by_scope: dict[int, list] = {}
             for scope in scopes_all:
                 scope_id = int(scope[0])
-                if any(r[2] == scope_id for r in response_rows_all):
+                if scope_id in scopes_with_responses:
                     archived_by_scope[scope_id] = archived_responses(source, scope_id)
             migrated_ids = {int(r[0]) for r in runs if str(r[5]) == "migrated"}
             migrated_observations: dict[int, list[tuple]] = {}
@@ -132,12 +139,19 @@ def reparse(
             hook("after_temp", temporary=temporary)
             target = open_ledger(temporary)
             try:
+                migrated_document_ids = {
+                    int(row[5]) for rows in migrated_observations.values() for row in rows
+                }
                 with transaction(target):
+                    # Only the documents migrated observations point at are copied;
+                    # every other document is created by the derivation that sights
+                    # it, so one a corrected parser no longer emits leaves no orphan.
                     for doc_id, kind, provider_id in documents:
-                        target.execute(
-                            "INSERT INTO documents (id, kind, provider_id) VALUES (?,?,?)",
-                            (doc_id, kind, provider_id),
-                        )
+                        if int(doc_id) in migrated_document_ids:
+                            target.execute(
+                                "INSERT INTO documents (id, kind, provider_id) VALUES (?,?,?)",
+                                (doc_id, kind, provider_id),
+                            )
                     for sha, body in versions:
                         target.execute(
                             "INSERT INTO versions (sha256, body) VALUES (?,?)"
@@ -406,7 +420,11 @@ def _reparse_one_run(
     finished_list = [str(r[12]) for r in response_inserts]
     if finished_list:
         new_finished = max(finished_list)
-        new_finished_day = local_day(new_finished)
+        # Days are stored at ingest; without --retime an unchanged instant keeps its day.
+        if not retime and new_finished == finished_at and finished_day is not None:
+            new_finished_day = finished_day
+        else:
+            new_finished_day = local_day(new_finished)
     else:
         new_finished, new_finished_day = finished_at, finished_day
         if retime and new_finished is not None:
@@ -435,7 +453,16 @@ def _reparse_one_run(
             scope_id = int(scope[0])
             kind, parent, expected = str(scope[2]), str(scope[3]), int(scope[4])
             if scope_id in recomputed:
-                close = recomputed[scope_id]
+                close = dict(recomputed[scope_id])
+                stored_closed_at, stored_closed_day, stored_error = scope[11], scope[12], scope[13]
+                if not retime and close["closed_at"] == stored_closed_at and stored_closed_day:
+                    close["closed_day"] = stored_closed_day
+                if (
+                    isinstance(stored_error, str)
+                    and stored_error.startswith(SWEPT)
+                    and close["error"]
+                ):
+                    close["error"] = SWEPT + close["error"]
                 target.execute(
                     "INSERT INTO scopes (id, run_id, kind, parent, expected, outcome,"
                     " infer_absence, status, rows, min_date, min_instant, closed_at,"
