@@ -35,7 +35,7 @@ if need ruff "pip install ruff"; then
 fi
 
 echo "==> python compiles"
-python3 -m py_compile pluggy_sync.py || { echo "  FAILED: py_compile"; fail=1; }
+python3 -m py_compile pluggy_sync.py pluggysync/*.py || { echo "  FAILED: py_compile"; fail=1; }
 
 echo "==> tests (unittest)"
 # Python 3.12+ exits 5 when no test ran, so an empty suite is red, not green.
