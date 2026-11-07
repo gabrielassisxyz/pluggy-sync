@@ -18,6 +18,9 @@
 - **Layout:** `pluggy_sync.py` is the entry point and the table mapping; the HTTP walk
   lives in `pluggysync/` (`transport.py` fetches bytes and never raises, `walk.py` turns
   them into pages and an outcome). Every attempt reaches `on_attempt` before parsing.
+  `ledger.py` holds the ledger schema (append-only by trigger), the file classifier and
+  the backup-then-migrate framework; `lock.py` is the one-writer-per-file `flock`, taken by
+  the legacy sync too. A legacy `pluggy.db` is never migrated in place.
 - **Run:** `./pluggy_sync.py` with `PLUGGY_CLIENT_ID`, `PLUGGY_CLIENT_SECRET`,
   `PLUGGY_ITEM_IDS` in the environment (`PLUGGY_DB` optional). Read-only against the
   API; it writes one SQLite file.
