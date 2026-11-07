@@ -20,6 +20,7 @@ import sqlite3
 import sys
 from typing import Any
 
+from pluggysync.lock import LockHeld, ProcessLock
 from pluggysync.transport import PageAttempt
 from pluggysync.walk import Client, FetchResult, utcnow
 
@@ -189,6 +190,14 @@ def sync() -> int:
             file=sys.stderr,
         )
         return 2
+
+    # Private files from here on: the database holds a person's financial history.
+    os.umask(0o077)
+    try:
+        lock = ProcessLock.exclusive(DB_PATH)
+    except LockHeld as held:
+        print(f"{held}; refusing to run two syncs against one database", file=sys.stderr)
+        return 1
 
     db = sqlite3.connect(DB_PATH)
     db.executescript(SCHEMA)
@@ -403,6 +412,7 @@ def sync() -> int:
         print(f"  {table:26} {count}")
 
     db.close()
+    lock.release()
     return 0
 
 
