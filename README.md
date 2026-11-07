@@ -42,7 +42,8 @@ received (zlib-compressed, with their SHA-256 and length), and the instant it
 arrived. The row is committed the moment the bytes land, before anything parses
 them. The API key travels in a request header and request headers are never
 stored; the authentication call is never archived. One full run of four
-connections archives about 1.8 MB of JSON, 150 KB compressed.
+connections archives 1.76 MB of JSON, 151 KB compressed (measured, see
+*Acceptance on real data* below).
 
 **Layer 2, the sightings.** `documents` is one row per `(kind, provider id)`,
 `versions` one row per distinct document body (canonical JSON, keyed by its
@@ -499,6 +500,36 @@ SELECT NULL, reserve_name, NULL, NULL, cents, NULL, reason
 FROM resolved WHERE reserve_id IS NULL
 ORDER BY reserve_id, reserve_name
 ```
+
+## Acceptance on real data
+
+Recorded on 2026-11-07, on a candidate built from the two frozen legacy states
+(three migrated runs, 3,719 sightings of 2,019 documents) plus one live run
+against the API, before the candidate was promoted.
+
+- The live run closed `complete`: 40 API calls, 39 walks owed, all complete,
+  no ambiguous document. `--check` exited 0 before and after it.
+  `run_coverage` shows runs 1 to 3 `migrated` and run 4 `complete`.
+- The archive of one full run of four connections: 1,763,579 raw bytes in
+  150,899 compressed, 8.6%. At one run a day that is about 55 MB a year.
+- `reserved_balance_history` returned 16 rows for the run, one per reserve
+  entry in the run's archived account responses.
+- The pending card purchase captured on 2026-09-12 and gone by 2026-11-07
+  was marked `removed` by the live run: its card's transactions walk reached
+  back to 2025-09-14, well before the purchase date, so the absence is
+  inside the walk's range. Its history shows `appeared` in run 2 and
+  `removed` in run 4; the posted twin is in the clean list.
+- Every example query in this file ran on the candidate. Balances as of
+  2026-09-12 read `not covered` (a migrated run infers nothing) and as of
+  2026-11-07 `covered`; the yield of every reserve between those two days
+  came back numeric, with no transfer in the window naming a renamed or
+  deleted reserve; the clean list held every present transaction and the
+  unresolved list was empty.
+- Every file the run created was mode `0600`: the database, its lock and
+  its journal.
+
+The values themselves are personal and stay out of this repository; the
+record with them is kept privately beside the database.
 
 ## Locks, backups and file modes
 
