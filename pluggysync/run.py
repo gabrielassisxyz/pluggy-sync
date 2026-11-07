@@ -183,6 +183,7 @@ class LedgerRun:
         with transaction(self._db):
             if outcome is None:
                 ambiguous = project_run(self._db, run_id)
+                self._crash_at("during_run_close", run_id=run_id)
                 problems = self_check(self._db, run_id)
                 if problems:
                     raise SelfCheckFailed(problems)

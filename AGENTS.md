@@ -24,6 +24,9 @@
 - **Run:** `./pluggy_sync.py` with `PLUGGY_CLIENT_ID`, `PLUGGY_CLIENT_SECRET`,
   `PLUGGY_ITEM_IDS` in the environment (`PLUGGY_DB` optional). Read-only against the
   API; it writes one SQLite file.
+- **Modes:** no flag is the legacy sync (until cutover). `--candidate <path>` runs the
+  ledger sync against a dedicated candidate file (never the live one, never an unignored
+  path in the repo); `--rebuild` regenerates layer 3. `pluggysync/cli.py` owns the dispatch.
 - **Test:** `python3 -m unittest discover -s tests -t .`
 - **Gate:** `bin/ci` (secret scan, shellcheck, ruff, compile, tests). It is the exact
   thing CI runs. Run it before a PR.

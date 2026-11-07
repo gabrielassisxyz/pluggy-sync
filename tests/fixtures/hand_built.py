@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import tempfile
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pluggysync.derive import canonical
@@ -27,14 +28,10 @@ class HandBuilt:
         self.directory.cleanup()
 
     def tick(self, hours: int = 24) -> str:
-        """A later instant each call: runs are days apart by default."""
+        """A later instant each call: runs are a day apart by default."""
         self._clock += hours
-        day = 1 + self._clock // 24
-        hour = 12 + self._clock % 24
-        if hour >= 24:
-            hour -= 24
-            day += 1
-        return f"2026-01-{day:02d}T{hour:02d}:00:00+00:00"
+        moment = datetime(2026, 1, 1, 12, tzinfo=UTC) + timedelta(hours=self._clock)
+        return moment.isoformat()
 
     # -- rows -----------------------------------------------------------------
 
