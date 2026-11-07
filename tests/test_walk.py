@@ -4,7 +4,9 @@ here" from a cut walk."""
 
 from __future__ import annotations
 
+import io
 import unittest
+from contextlib import redirect_stderr
 from itertools import pairwise
 
 from pluggysync.walk import BASE, REQUEST_GAP_SECONDS, Client, FetchResult
@@ -108,6 +110,12 @@ class CursorWalkTest(WalkCase):
 
         self.assertIncomplete(self.client.cursored(TRANSACTIONS, q1), "does not advance")
 
+    def test_empty_next_is_incomplete_not_the_end(self) -> None:
+        q1 = cursor_query()
+        self.transport.answer(f"{TRANSACTIONS}{q1}", ok(cursor_page([transaction(1)], "")))
+
+        self.assertIncomplete(self.client.cursored(TRANSACTIONS, q1), "carries no cursor")
+
     def test_next_as_an_absolute_url_is_incomplete(self) -> None:
         q1 = cursor_query()
         self.transport.answer(
@@ -125,7 +133,8 @@ class RetryTest(WalkCase):
             path, refused(429, [["Retry-After", "abc"]]), ok(paged_page([account(1)]))
         )
 
-        result = self.client.paged(f"/accounts?itemId={ITEM_ID}")
+        with redirect_stderr(io.StringIO()):
+            result = self.client.paged(f"/accounts?itemId={ITEM_ID}")
 
         self.assertEqual(result.outcome, "complete")
         self.assertEqual([a.status for a in self.archive.attempts], [429, 200])
@@ -142,7 +151,8 @@ class RetryTest(WalkCase):
             ok(paged_page([account(1)])),
         )
 
-        self.client.paged(f"/accounts?itemId={ITEM_ID}")
+        with redirect_stderr(io.StringIO()):
+            self.client.paged(f"/accounts?itemId={ITEM_ID}")
 
         self.assertIn(7, self.clock.sleeps)
         self.assertIn(300, self.clock.sleeps)
@@ -168,6 +178,20 @@ class RetryTest(WalkCase):
         self.assertEqual(len(result.pages), 1)
         self.assertEqual(self.archive.attempts[0].error, "truncated")
         self.assertEqual(self.archive.attempts[0].body_bytes, b'{"results": [{"id": "acc')
+
+    def test_status_keeps_the_last_whole_response_when_a_later_page_fails(self) -> None:
+        self.transport.answer(
+            f"/accounts?itemId={ITEM_ID}&{PAGE_1}", ok(paged_page([account(1)], 1, 2))
+        )
+        self.transport.answer(
+            f"/accounts?itemId={ITEM_ID}&{PAGE_2}", unreachable(), unreachable(), unreachable()
+        )
+
+        result = self.client.paged(f"/accounts?itemId={ITEM_ID}")
+
+        self.assertIncomplete(result, "transport")
+        self.assertEqual(result.status, 200)
+        self.assertEqual(len(result.documents), 1)
 
     def test_transport_failures_are_bounded_and_end_incomplete(self) -> None:
         path = f"/accounts?itemId={ITEM_ID}&{PAGE_1}"
@@ -357,6 +381,26 @@ class AuthTest(WalkCase):
         self.transport.answer("/auth", refused(401))
 
         self.assertIncomplete(self.client.single(f"/items/{ITEM_ID}"), "auth: HTTP 401")
+
+    def test_refused_credentials_are_not_posted_again_this_run(self) -> None:
+        self.transport.answer("/auth", refused(401))
+
+        first = self.client.single(f"/items/{ITEM_ID}")
+        second = self.client.paged(f"/accounts?itemId={ITEM_ID}")
+
+        self.assertIncomplete(first, "auth: HTTP 401")
+        self.assertIncomplete(second, "not retried this run")
+        self.assertEqual(self.transport.urls.count(f"{BASE}/auth"), 1)
+
+    def test_auth_server_error_is_retried_by_the_next_walk(self) -> None:
+        self.transport.answer("/auth", refused(503))
+        self.transport.answer(f"/items/{ITEM_ID}", ok(item()))
+
+        first = self.client.single(f"/items/{ITEM_ID}")
+        second = self.client.single(f"/items/{ITEM_ID}", expected_id=ITEM_ID)
+
+        self.assertIncomplete(first, "auth: HTTP 503")
+        self.assertEqual(second.outcome, "complete")
 
     def test_auth_body_without_a_key_is_incomplete(self) -> None:
         self.transport.answer("/auth", ok({"token": "nope"}))

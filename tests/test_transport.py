@@ -24,6 +24,8 @@ class ScriptedHandler(BaseHTTPRequestHandler):
             self._reply(200, b'{"results": []}', [("x-repeated", "one"), ("x-repeated", "two")])
         elif self.path == "/refused":
             self._reply(404, b'{"message": "not here"}')
+        elif self.path == "/redirect":
+            self._reply(302, b"elsewhere", [("Location", "/ok")])
         elif self.path == "/truncated":
             self.send_response(200)
             self.send_header("Content-Length", "4096")
@@ -102,6 +104,19 @@ class UrllibFetchTest(unittest.TestCase):
         self.assertIsNone(transport.body_bytes)
         self.assertIsNotNone(transport.error)
         self.assertFalse(transport.usable)
+
+    def test_redirect_is_reported_not_followed(self) -> None:
+        transport = urllib_fetch("GET", f"{self.base}/redirect", {"X-API-KEY": "k"})
+
+        self.assertEqual(transport.status, 302)
+        self.assertEqual(transport.body_bytes, b"elsewhere")
+        self.assertIn(["Location", "/ok"], transport.headers)
+
+    def test_unusable_url_is_a_value_not_an_exception(self) -> None:
+        transport = urllib_fetch("GET", "not a url", {})
+
+        self.assertEqual(transport.status, 0)
+        self.assertIsNotNone(transport.error)
 
     def test_post_sends_the_body(self) -> None:
         transport = urllib_fetch("POST", f"{self.base}/auth", {}, b'{"clientId": "x"}')

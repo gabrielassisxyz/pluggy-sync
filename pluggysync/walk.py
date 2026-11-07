@@ -16,6 +16,7 @@ walk later decides about them.
 from __future__ import annotations
 
 import json
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -195,10 +196,15 @@ class Client:
         self._clock: Clock = clock or SystemClock()
         self._base = base
         self._api_key: str | None = None
+        self._auth_refused: str | None = None
 
     # -- authentication -----------------------------------------------------
 
     def _key(self) -> str:
+        # Credentials the API refused once are refused for the rest of the run:
+        # re-posting the secret before every walk would only multiply the failure.
+        if self._auth_refused is not None:
+            raise AuthFailure(f"{self._auth_refused}, not retried this run")
         if self._api_key is None:
             self._api_key = self._authenticate()
         return self._api_key
@@ -211,6 +217,8 @@ class Client:
         )
         if not transport.usable:
             raise AuthFailure(f"transport: {transport.error or 'no response'}")
+        if 400 <= transport.status < 500:
+            self._auth_refused = f"HTTP {transport.status}"
         if not 200 <= transport.status < 300:
             raise AuthFailure(f"HTTP {transport.status}")
         document, parse_error = load_document(transport.body_bytes or b"")
@@ -261,7 +269,9 @@ class Client:
                 self._api_key = None
                 continue
             if transport.status == 429 and not last_try:
-                self._clock.sleep(retry_after_seconds(transport.headers))
+                wait = retry_after_seconds(transport.headers)
+                print(f"    429, waiting {wait}s", file=sys.stderr)
+                self._clock.sleep(wait)
                 continue
             return last
         return last
@@ -269,7 +279,8 @@ class Client:
     def _page_body(self, walk: _Walk, url: str, position: int) -> tuple[Any, Any]:
         terminal = self._terminal(url)
         transport = terminal.transport
-        walk.status = transport.status if transport is not None and transport.usable else 0
+        if transport is not None and transport.usable:
+            walk.status = transport.status
         if terminal.error is not None or transport is None:
             walk.fail(terminal.error or "no response")
         if transport.status != 200:
@@ -389,8 +400,10 @@ def _cursored_shape_error(
     parts = urlsplit(following)
     if parts.scheme or parts.netloc or parts.path not in ("", path):
         return f"next {following!r} does not name this endpoint"
-    if not following.startswith("?") and not following.startswith(path):
-        return f"next {following!r} is not a relative query"
+    if not parts.query:
+        # An empty string is not "absent": the real API omits the key when a
+        # walk ends, so a present-but-empty cursor is a shape nobody has seen.
+        return f"next {following!r} carries no cursor"
     parameters = parse_qs(parts.query)
     if parameters.get("accountId") != account:
         return f"next {following!r} names another account"

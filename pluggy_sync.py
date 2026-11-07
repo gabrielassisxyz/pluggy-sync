@@ -211,7 +211,8 @@ def sync() -> int:
 
     # The category tree is global rather than per-connection.
     categories = api.paged("/categories")
-    for row in categories.documents:
+    category_rows = categories.documents
+    for row in category_rows:
         upsert(
             db,
             "categories",
@@ -222,8 +223,8 @@ def sync() -> int:
             },
             row,
         )
-    probe("/categories", categories, len(categories.documents))
-    print(f"categories: {len(categories.documents)}")
+    probe("/categories", categories, len(category_rows))
+    print(f"categories: {len(category_rows)}")
 
     for item_id in item_ids:
         print(f"\n── connection {item_id}")
@@ -231,7 +232,7 @@ def sync() -> int:
         item_result = api.single(f"/items/{item_id}", expected_id=item_id)
         probe(f"/items/{item_id}", item_result, len(item_result.documents))
         if item_result.outcome != "complete":
-            print(f"   ✗ HTTP {item_result.status}, skipped")
+            print(f"   ✗ HTTP {item_result.status}, skipped ({item_result.error})")
             continue
         item = item_result.documents[0]
 
@@ -281,7 +282,8 @@ def sync() -> int:
         probe(f"/identity?itemId={item_id}", identity, len(identity.documents))
 
         investments = api.paged(f"/investments?itemId={item_id}")
-        for row in investments.documents:
+        investment_rows = investments.documents
+        for row in investment_rows:
             upsert(
                 db,
                 "investments",
@@ -310,9 +312,9 @@ def sync() -> int:
                     },
                     tx,
                 )
-        probe(f"/investments?itemId={item_id}", investments, len(investments.documents))
-        if investments.documents:
-            print(f"   investments: {len(investments.documents)}")
+        probe(f"/investments?itemId={item_id}", investments, len(investment_rows))
+        if investment_rows:
+            print(f"   investments: {len(investment_rows)}")
 
         accounts = api.paged(f"/accounts?itemId={item_id}")
         probe(f"/accounts?itemId={item_id}", accounts, len(accounts.documents))
@@ -335,7 +337,8 @@ def sync() -> int:
             )
 
             transactions = api.cursored("/v2/transactions", f"?accountId={account_id}")
-            for row in transactions.documents:
+            transaction_rows = transactions.documents
+            for row in transaction_rows:
                 upsert(
                     db,
                     "transactions",
@@ -351,11 +354,7 @@ def sync() -> int:
                     },
                     row,
                 )
-            probe(
-                f"/v2/transactions?accountId={account_id}",
-                transactions,
-                len(transactions.documents),
-            )
+            probe(f"/v2/transactions?accountId={account_id}", transactions, len(transaction_rows))
 
             bills: list[dict[str, Any]] = []
             if account.get("type") == "CREDIT":
@@ -378,7 +377,7 @@ def sync() -> int:
                 probe(f"/bills?accountId={account_id}", bill_walk, len(bills))
 
             extra = f", {len(bills)} bills" if bills else ""
-            print(f"   {account.get('name')}: {len(transactions.documents)} transactions{extra}")
+            print(f"   {account.get('name')}: {len(transaction_rows)} transactions{extra}")
 
         db.commit()
 

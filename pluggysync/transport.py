@@ -59,6 +59,20 @@ Fetch = Callable[[str, str, dict[str, str], bytes | None], Transport]
 OnAttempt = Callable[[PageAttempt], Any]
 
 
+class _RedirectIsAnAnswer(urllib.request.HTTPRedirectHandler):
+    """`urllib` would follow a 3xx and resend every header, API key included, to
+    whatever host `Location` names, and the archive would file the other host's
+    bytes under the URL that was asked. A redirect is reported as the status it is."""
+
+    def redirect_request(
+        self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_RedirectIsAnAnswer)
+
+
 def _read_everything(stream: Any, headers: HeaderPairs) -> tuple[bytes, str | None]:
     """Reads a response body chunk by chunk so a failure mid-body still returns
     what had arrived, instead of losing the whole response to one exception.
@@ -105,16 +119,16 @@ def urllib_fetch(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> Transport:
     """The real transport, over `urllib`. Never raises."""
-    request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        response = urllib.request.urlopen(request, timeout=timeout)
+        request = urllib.request.Request(url, data=body, headers=headers, method=method)
+        response = _OPENER.open(request, timeout=timeout)
     except urllib.error.HTTPError as error:
         # A non-2xx answer is still an answer: status, headers and body arrived.
         headers_received = _header_pairs(error.headers)
         with error:
             received, read_error = _read_everything(error, headers_received)
         return Transport(error.code, headers_received, received, read_error)
-    except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as error:
         return Transport(0, [], None, _describe(error))
     headers_received = _header_pairs(response.headers)
     with response:
