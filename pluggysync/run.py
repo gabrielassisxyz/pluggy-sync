@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from .archive import Archive, archived_responses
 from .derive import Scope, canonical, close_scope, derive_scope, load_scope
+from .events import ambiguous_documents, project_pending_runs, project_run
 from .ledger import local_day, transaction
 from .replay import replay_walk, scope_request, walk_scope
 from .transport import OnAttempt
@@ -114,6 +115,9 @@ class LedgerRun:
                 self._settle_pending(run_id, now)
                 self._insert_children(run_id, walk=False)
                 self._close_run(run_id, outcome="interrupted", note=f"interrupted; swept at {now}")
+            # A terminal run an earlier close could not project (its self-check
+            # failed then) is tried again here, in order, before anything new runs.
+            project_pending_runs(self._db, self_check)
         return stale
 
     def execute(self) -> int:
@@ -177,18 +181,23 @@ class LedgerRun:
 
     def _close_run(self, run_id: int, outcome: str | None = None, note: str | None = None) -> None:
         with transaction(self._db):
-            ambiguous = self._record_ambiguities(run_id)
-            problems = self_check(self._db, run_id)
-            if problems and outcome is None:
-                raise SelfCheckFailed(problems)
             if outcome is None:
+                ambiguous = project_run(self._db, run_id)
+                problems = self_check(self._db, run_id)
+                if problems:
+                    raise SelfCheckFailed(problems)
                 outcome = (
                     "complete"
                     if self._every_owed_scope_done(run_id) and not ambiguous
                     else "partial"
                 )
-            if problems:
-                note = f"{note + '; ' if note else ''}self-check: {'; '.join(problems)}"
+            else:
+                # Interrupted or failed: project what did commit, only if it checks out.
+                problems = self_check(self._db, run_id)
+                if problems:
+                    note = f"{note + '; ' if note else ''}self-check: {'; '.join(problems)}"
+                else:
+                    project_run(self._db, run_id)
             last = self._db.execute(
                 "SELECT max(received_at), count(*) FROM responses WHERE run_id = ?", (run_id,)
             ).fetchone()
@@ -352,16 +361,6 @@ class LedgerRun:
 
     # -- run close ------------------------------------------------------------
 
-    def _record_ambiguities(self, run_id: int) -> dict[int, tuple[list[str], str]]:
-        ambiguous = ambiguous_documents(self._db, run_id)
-        for document_id, (parents, reason) in ambiguous.items():
-            self._db.execute(
-                "INSERT OR IGNORE INTO ambiguities (run_id, document_id, candidate_parents, reason)"
-                " VALUES (?,?,?,?)",
-                (run_id, document_id, json.dumps(parents), reason),
-            )
-        return ambiguous
-
     def _every_owed_scope_done(self, run_id: int) -> bool:
         undone = self._db.execute(
             "SELECT count(*) FROM scopes WHERE run_id = ? AND expected = 1"
@@ -402,54 +401,16 @@ def sightings_in_scope(
 def present_parents(
     connection: sqlite3.Connection, kind: str, item_id: str, before_run: int
 ) -> dict[str, bool]:
-    """Parents of `kind` under `item_id` the ledger last saw present before this
-    run: provider_id -> last sighting was CREDIT. Until the projections land
-    this is read from the sightings themselves: a document's latest earlier
-    observation names its parent, and a later `removed`/`parent_gone` event,
-    once events exist, withdraws it."""
+    """Parents of `kind` under `item_id` the ledger holds present before this
+    run: provider_id -> last sighting was CREDIT. Read from `document_state`,
+    which the run being planned has not been projected into yet."""
     rows = connection.execute(
-        "SELECT d.provider_id, o.parent, v.body, o.run_id FROM observations o"
-        " JOIN documents d ON d.id = o.document_id JOIN versions v ON v.sha256 = o.sha256"
-        " WHERE d.kind = ? AND o.run_id < ? AND o.id = ("
-        "   SELECT max(id) FROM observations WHERE document_id = o.document_id AND run_id < ?)",
-        (kind, before_run, before_run),
+        "SELECT d.provider_id, v.body FROM document_state ds"
+        " JOIN documents d ON d.id = ds.document_id JOIN versions v ON v.sha256 = ds.sha256"
+        " WHERE d.kind = ? AND ds.parent = ? AND ds.state = 'present' AND ds.last_seen_run < ?",
+        (kind, item_id, before_run),
     ).fetchall()
-    present: dict[str, bool] = {}
-    for provider_id, parent, body, seen_run in rows:
-        if parent != item_id:
-            continue
-        gone = connection.execute(
-            "SELECT 1 FROM events e JOIN documents d ON d.id = e.document_id"
-            " WHERE d.kind = ? AND d.provider_id = ? AND e.run_id >= ? AND e.run_id < ?"
-            " AND e.event IN ('removed', 'parent_gone')"
-            " AND e.seq = (SELECT max(seq) FROM events WHERE run_id = e.run_id"
-            "              AND document_id = e.document_id)",
-            (kind, provider_id, seen_run, before_run),
-        ).fetchone()
-        if gone is None:
-            present[provider_id] = _is_credit(body)
-    return present
-
-
-def ambiguous_documents(
-    connection: sqlite3.Connection, run_id: int
-) -> dict[int, tuple[list[str], str]]:
-    """Documents seen in the run with two bodies or under two parents."""
-    rows = connection.execute(
-        "SELECT document_id, count(DISTINCT sha256), count(DISTINCT parent),"
-        " json_group_array(DISTINCT parent) FROM observations WHERE run_id = ?"
-        " GROUP BY document_id HAVING count(DISTINCT sha256) > 1 OR count(DISTINCT parent) > 1",
-        (run_id,),
-    ).fetchall()
-    ambiguous: dict[int, tuple[list[str], str]] = {}
-    for document_id, bodies, parents, parent_list in rows:
-        reasons = []
-        if bodies > 1:
-            reasons.append("two bodies in one run")
-        if parents > 1:
-            reasons.append("two parents in one run")
-        ambiguous[int(document_id)] = (sorted(json.loads(parent_list)), "; ".join(reasons))
-    return ambiguous
+    return {provider_id: _is_credit(body) for provider_id, body in rows}
 
 
 # -- the per-run self-check -----------------------------------------------------
