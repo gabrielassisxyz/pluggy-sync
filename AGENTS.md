@@ -44,9 +44,18 @@
 
 ## Scope (current)
 - **Current scope:** collect every resource the Pluggy API exposes for the configured
-  connections into a local SQLite database, keeping the provider's JSON for each row.
+  connections into a local SQLite database, keeping the provider's JSON for each row,
+  plus the container image that ships the program.
   Don't expand beyond it without a present need; if a change drifts past it, STOP and
   flag it.
+
+## Release
+- Cut a version by pushing a `v*` tag. The image workflow builds the `test` stage,
+  builds `final` with `PLUGGY_CODE_VERSION=<tag>-<short-sha>`, refuses when the
+  version tag already exists in the registry, smoke-tests the image, then pushes
+  that tag and no `latest`. Version tags are immutable because the ledger is
+  append-only and each run names the code that wrote it.
+- `bin/ci` does not build images.
 
 <!-- BEGIN universal-principles v3 -->
 ## Working principles

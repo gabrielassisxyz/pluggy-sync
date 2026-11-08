@@ -1,0 +1,7 @@
+*
+!pluggy_sync.py
+!pluggysync/
+!tests/
+!README.md
+!.gitignore
+**/__pycache__

@@ -1,0 +1,81 @@
+name: image
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - pluggy_sync.py
+      - pluggysync/**
+      - tests/**
+      - .github/workflows/image.yml
+  push:
+    tags:
+      - v*
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build the test stage
+        run: docker build --target test -t pluggy-sync-test .
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build the test stage
+        run: docker build --target test -t pluggy-sync-test .
+      - name: Build the final stage
+        run: |
+          set -euo pipefail
+          repo_lower="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          image="ghcr.io/${repo_lower}"
+          tag="${GITHUB_REF_NAME}"
+          version_no_v="${tag#v}"
+          short_sha="$(git rev-parse --short HEAD)"
+          version="${tag}-${short_sha}"
+          echo "IMAGE=${image}" >> "$GITHUB_ENV"
+          echo "VERSION_NO_V=${version_no_v}" >> "$GITHUB_ENV"
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+          docker build --target final --build-arg "PLUGGY_CODE_VERSION=${version}" \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            -t "${image}:${version_no_v}" .
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+      - name: Refuse a tag that already exists
+        run: |
+          set -euo pipefail
+          if docker manifest inspect "${IMAGE}:${VERSION_NO_V}" >/dev/null 2>&1; then
+            echo "tag ${VERSION_NO_V} already exists, refusing" >&2
+            exit 1
+          fi
+      - name: Smoke test the final image
+        run: |
+          set -euo pipefail
+          code=0
+          docker run --rm --network none "${IMAGE}:${VERSION_NO_V}" >smoke.out 2>smoke.err || code=$?
+          test "${code}" -eq 2
+          grep -q "missing in the environment" smoke.err
+          docker run --rm --network none --entrypoint python "${IMAGE}:${VERSION_NO_V}" -c "from pluggysync.run import code_version; print(code_version('/app'))" | grep -q "${VERSION}"
+          docker run --rm --network none --entrypoint ls "${IMAGE}:${VERSION_NO_V}" -1 /app | LC_ALL=C sort > app.list
+          printf 'pluggy_sync.py\npluggysync\n' | LC_ALL=C sort > expected.list
+          diff -u expected.list app.list
+          docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "${IMAGE}:${VERSION_NO_V}" | grep -q "${GITHUB_REPOSITORY}"
+      - name: Push the version tag
+        run: docker push "${IMAGE}:${VERSION_NO_V}"
