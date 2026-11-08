@@ -558,6 +558,12 @@ record with them is kept privately beside the database.
   numbers and counterparties.
 - A run that crashes is closed on the next start, as `interrupted`, with
   exactly what it managed to archive; nothing is resumed and nothing is lost.
+- Every run ends by writing `pluggy-snapshot.db` beside the database (or
+  `PLUGGY_SNAPSHOT` when set), a verified copy made with `Connection.backup`
+  that passes `PRAGMA integrity_check` before it replaces the previous file.
+  The backup job reads the snapshot, never the live file. A run whose
+  self-check reports problems keeps the previous snapshot, and a snapshot
+  failure exits 1.
 
 ## What the API will not do
 
