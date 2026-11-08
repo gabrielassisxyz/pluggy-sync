@@ -46,6 +46,25 @@ rename leaves the legacy file in place and a marked staging file the next
 
 Re-running is safe. The ledger never overwrites: a run adds what it saw.
 
+### Running the container image
+
+Each `v*` tag publishes one versioned image, named from the repository in
+lower case, with the tag being the version without the leading `v` and no
+`latest`. The image records `PLUGGY_CODE_VERSION=<tag>-<short-sha>`.
+
+```sh
+docker pull ghcr.io/<owner-lower>/pluggy-sync:0.1.0
+docker run --rm \
+  -e PLUGGY_CLIENT_ID -e PLUGGY_CLIENT_SECRET -e PLUGGY_ITEM_IDS \
+  -e PLUGGY_DB=/data/pluggy.db \
+  -v "$PWD:/data" \
+  ghcr.io/<owner-lower>/pluggy-sync:0.1.0
+```
+
+`PLUGGY_DB` names where the database lives inside the container; mount that
+directory from the host so the file outlives the run. Without the variables
+the program exits 2.
+
 ### Exit codes
 
 | code | meaning |
