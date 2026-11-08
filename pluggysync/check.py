@@ -97,6 +97,10 @@ def _recompute_scope(
     return result, close, per_page
 
 
+def _notes_staleness(note: object) -> bool:
+    return isinstance(note, str) and "stale " in note
+
+
 def check_connection(connection: sqlite3.Connection) -> tuple[list[str], list[str]]:
     problems: list[str] = []
     info: list[str] = []
@@ -327,7 +331,12 @@ def check_connection(connection: sqlite3.Connection) -> tuple[list[str], list[st
             ).fetchone()[0]
         )
         want = "complete" if undone == 0 and ambiguous == 0 else "partial"
-        if outcome != want:
+        note = connection.execute("SELECT note FROM runs WHERE id = ?", (run_id,)).fetchone()[0]
+        # A run the freshness check closed partial recorded why; the walks alone
+        # would read complete, and the check cannot re-judge freshness under
+        # today's thresholds without inventing a disagreement.
+        stale_partial = outcome == "partial" and want == "complete" and _notes_staleness(note)
+        if outcome != want and not stale_partial:
             problems.append(
                 f"run {run_id} outcome {outcome!r} != recomputed {want!r}"
                 f" ({undone} owed scopes unfinished, {ambiguous} ambiguous documents)"
