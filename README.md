@@ -46,6 +46,26 @@ rename leaves the legacy file in place and a marked staging file the next
 
 Re-running is safe. The ledger never overwrites: a run adds what it saw.
 
+### Exit codes
+
+| code | meaning |
+| --- | --- |
+| `0` | the run closed `complete` and every connection and consent is fresh |
+| `1` | the run closed `partial`: a walk did not finish, a document was ambiguous, or a connection or consent is stale; what was collected is saved |
+| `2` | configuration missing or invalid; nothing was opened or written |
+| `3` | the run `failed`: the provider refused the credentials, or an unhandled error |
+
+Freshness is judged at run start on the documents the run sighted. A
+connection is stale when its `status` is not `UPDATED`, its `executionStatus`
+is not `SUCCESS`, or its `lastUpdatedAt` is more than 48 hours old (the
+provider syncs about once a day; 48 hours tolerates one missed cycle). A
+consent is stale when `revokedAt` is set or `expiresAt` is within 30 days.
+Each stale item or consent, and each owed walk that did not finish, is one
+line on stderr before the outcome line, and the reasons are kept in
+`runs.note`. A run the recovery sweep closed on the way in is printed but
+does not change the new run's exit code.
+
+
 ## What it stores
 
 The database has three layers.

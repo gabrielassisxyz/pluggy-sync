@@ -30,6 +30,9 @@ from .walk import Client, Clock, SystemClock, utcnow
 
 MakeClient = Callable[[OnAttempt], Client]
 
+# What the process says about a run. 2 is configuration, raised before any write.
+EXIT_BY_OUTCOME = {"complete": 0, "partial": 1, "failed": 3}
+
 
 class CandidateRefused(Exception):
     pass
@@ -150,7 +153,11 @@ def ledger_sync(
             f" {complete} complete, {unavailable} unavailable, {incomplete} incomplete,"
             f" {skipped} skipped; {ambiguous} ambiguous documents"
         )
-        return 0 if outcome != "failed" else 1
+        for line in run.summary(run_id):
+            _say(line)
+        code = EXIT_BY_OUTCOME.get(outcome, 1)
+        _say(f"run {run_id}: {outcome}; exit {code}")
+        return code
     finally:
         connection.close()
         lock.release()
