@@ -130,6 +130,15 @@ class CandidateCliTest(unittest.TestCase):
         self.assertIn("PLUGGY_ITEM_IDS", err)
         self.assertFalse(os.path.exists(candidate))
 
+    def test_candidate_runs_without_git_on_path(self) -> None:
+        candidate = os.path.join(self.directory.name, "candidate.db")
+        with tempfile.TemporaryDirectory() as empty:
+            with mock.patch.dict(os.environ, {"PATH": empty}):
+                code, out, err = self.run_cli("--candidate", candidate)
+
+        self.assertEqual(code, 0, err)
+        self.assertIn("run 1: complete", out)
+
 
 if __name__ == "__main__":
     unittest.main()
