@@ -19,12 +19,12 @@ RUN git init
 RUN python -m unittest discover -s tests -t .
 
 FROM python:3.14.7-alpine3.24 AS final
-RUN mkdir -p /app && chown 1000:1000 /app
+# Root-owned on purpose: with PLUGGY_DB unset the program would otherwise create
+# its database inside the container and lose it on exit, reporting success.
 WORKDIR /app
-COPY --chown=1000:1000 pluggy_sync.py ./
-COPY --chown=1000:1000 pluggysync ./pluggysync
+COPY pluggy_sync.py ./
+COPY pluggysync ./pluggysync
 ARG PLUGGY_CODE_VERSION=unknown
 ENV PYTHONDONTWRITEBYTECODE=1 PLUGGY_CODE_VERSION=${PLUGGY_CODE_VERSION}
 USER 1000:1000
 ENTRYPOINT ["python", "/app/pluggy_sync.py"]
-LABEL org.opencontainers.image.source="https://github.com/gabrielassisxyz/pluggy-sync"
