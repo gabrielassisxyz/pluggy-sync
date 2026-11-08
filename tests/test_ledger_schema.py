@@ -11,7 +11,6 @@ import sqlite3
 import tempfile
 import unittest
 
-import pluggy_sync
 from pluggysync.ledger import (
     APPEND_ONLY_TABLES,
     KINDS,
@@ -22,6 +21,7 @@ from pluggysync.ledger import (
     open_ledger,
     user_version,
 )
+from pluggysync.legacy_schema import LEGACY_SCHEMA
 
 EXPECTED_TABLES = {
     "runs",
@@ -402,7 +402,7 @@ class LegacyRefusalTest(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.legacy = os.path.join(self.directory.name, "pluggy.db")
         db = sqlite3.connect(self.legacy)
-        db.executescript(pluggy_sync.SCHEMA)
+        db.executescript(LEGACY_SCHEMA)
         db.execute(
             "INSERT INTO sync_runs (started_at, finished_at, api_calls) VALUES (?,?,?)",
             (INSTANT, INSTANT, 40),

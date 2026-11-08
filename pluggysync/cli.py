@@ -16,22 +16,34 @@ import subprocess
 import sys
 from collections.abc import Callable, Sequence
 
-from .check import check_file
+from .check import check_connection, check_file
 from .events import ProjectionBlocked
 from .ledger import LegacyDatabase, UnknownDatabase, open_ledger
 from .legacy_import import ImportFailed, import_states
 from .lock import LockHeld, LockRefused, ProcessLock
+from .promote import PromotionRefused, promote
 from .rebuild import rebuild
 from .reparse import ReparseRefused, reparse
 from .run import ConfigurationError, LedgerRun, code_version, parse_item_ids
 from .transport import OnAttempt
-from .walk import Client, Clock, SystemClock
+from .walk import Client, Clock, SystemClock, utcnow
 
 MakeClient = Callable[[OnAttempt], Client]
 
 
 class CandidateRefused(Exception):
     pass
+
+
+class CutoverMissing(Exception):
+    """A ledger file nobody promoted: an intermediate state the default sync refuses."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f"{path} is a ledger database without a cutover row, so it was never promoted;"
+            " run the ledger against a candidate with --candidate <path>, or install a checked"
+            " candidate with --promote <path> --from-states ..."
+        )
 
 
 def script_dir() -> str:
@@ -103,11 +115,18 @@ def _open(path: str) -> tuple[ProcessLock, sqlite3.Connection]:
     return lock, connection
 
 
-def ledger_sync(path: str, make_client: MakeClient | None, clock: Clock | None) -> int:
+def ledger_sync(
+    path: str,
+    make_client: MakeClient | None,
+    clock: Clock | None,
+    require_cutover: bool = False,
+) -> int:
     client_id, client_secret, item_ids = _environment()
     clock = clock or SystemClock()
     lock, connection = _open(path)
     try:
+        if require_cutover and not connection.execute("SELECT count(*) FROM cutover").fetchone()[0]:
+            raise CutoverMissing(path)
 
         def default_client(on_attempt: OnAttempt) -> Client:
             return Client(client_id, client_secret, on_attempt, clock=clock)
@@ -177,6 +196,35 @@ def rebuild_mode(path: str) -> int:
         lock.release()
 
 
+def _check_under_our_lock(path: str) -> list[str]:
+    """The integrity check for a file this process already holds the write lock on:
+    `check_file` would take the shared lock and read its own caller as a writer."""
+    if (os.stat(path).st_mode & 0o777) != 0o600:
+        return [f"file mode {oct(os.stat(path).st_mode & 0o777)} is not 0600"]
+    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        connection.execute("PRAGMA foreign_keys=ON")
+        problems, _ = check_connection(connection)
+    finally:
+        connection.close()
+    return problems
+
+
+def promote_mode(candidate: str, state_paths: list[str]) -> int:
+    live = live_db_path()
+    report = promote(
+        live,
+        candidate,
+        state_paths,
+        check=_check_under_our_lock,
+        completed_at=utcnow(),
+    )
+    for step in report.steps:
+        print(step)
+    print(f"{live}: promoted from {candidate}")
+    return 0
+
+
 def check_mode(path: str) -> int:
     code, problems, info = check_file(path)
     for line in info:
@@ -237,7 +285,28 @@ def main(
         help="with --candidate: build the candidate from these frozen legacy databases,"
         " oldest first, instead of running a sync",
     )
+    parser.add_argument(
+        "--promote",
+        metavar="CANDIDATE",
+        help="with --from-states: make this checked candidate the live database",
+    )
     args = parser.parse_args(argv)
+    if args.promote:
+        if not args.from_states:
+            _say("--promote needs --from-states <state> ...: the states the candidate came from")
+            return 2
+        if args.candidate or args.check or args.reparse or args.rebuild or args.retime:
+            _say("--promote takes only --from-states")
+            return 2
+        try:
+            candidate = check_candidate_path(args.promote, live_db_path())
+            return promote_mode(candidate, args.from_states)
+        except (CandidateRefused, ConfigurationError) as refused:
+            _say(str(refused))
+            return 2
+        except (LockHeld, LockRefused, PromotionRefused) as refused:
+            _say(str(refused))
+            return 1
     if args.from_states and not args.candidate:
         _say("--from-states needs --candidate <path>: the import never touches the live database")
         return 2
@@ -245,10 +314,22 @@ def main(
         _say("--from-states cannot be combined with --check, --reparse or --rebuild")
         return 2
     modes = (args.candidate, args.rebuild, args.check, args.reparse, args.retime, args.from_states)
-    if not any(modes):
-        from pluggy_sync import sync  # the legacy path, until cutover
-
-        return sync()
+    try:
+        if not any(modes):
+            return ledger_sync(live_db_path(), make_client, clock, require_cutover=True)
+    except ConfigurationError as refused:
+        _say(str(refused))
+        return 2
+    except (
+        LockHeld,
+        LockRefused,
+        LegacyDatabase,
+        UnknownDatabase,
+        CutoverMissing,
+        ProjectionBlocked,
+    ) as refused:
+        _say(str(refused))
+        return 1
     if args.retime and not args.reparse:
         _say("--retime needs --reparse")
         return 2

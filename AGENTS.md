@@ -23,10 +23,14 @@
   the legacy sync too. A legacy `pluggy.db` is never migrated in place.
 - **Run:** `./pluggy_sync.py` with `PLUGGY_CLIENT_ID`, `PLUGGY_CLIENT_SECRET`,
   `PLUGGY_ITEM_IDS` in the environment (`PLUGGY_DB` optional). Read-only against the
-  API; it writes one SQLite file.
-- **Modes:** no flag is the legacy sync (until cutover). `--candidate <path>` runs the
-  ledger sync against a dedicated candidate file (never the live one, never an unignored
-  path in the repo); `--rebuild` regenerates layer 3. `pluggysync/cli.py` owns the dispatch.
+  API; it writes one SQLite file and exits non-zero when the run is not complete.
+- **Modes:** no flag is the ledger sync against `PLUGGY_DB`, which must carry its `cutover`
+  row (a legacy file or an unpromoted ledger is refused). `--candidate <path>` runs it against a
+  dedicated candidate file (never the live one, never an unignored path in the repo), with
+  `--from-states` building the candidate from frozen legacy copies; `--promote <candidate>
+  --from-states ...` installs a checked candidate; `--check`, `--rebuild`, `--reparse`.
+  `pluggysync/cli.py` owns the dispatch. The legacy sync is gone; its schema lives in
+  `pluggysync/legacy_schema.py` for the import and the promotion.
 - **Test:** `python3 -m unittest discover -s tests -t .`
 - **Gate:** `bin/ci` (secret scan, shellcheck, ruff, compile, tests). It is the exact
   thing CI runs. Run it before a PR.

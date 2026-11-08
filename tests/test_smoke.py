@@ -4,15 +4,13 @@ anything is written, with exit code 2 and a message naming the variables."""
 import io
 import os
 import pathlib
-import sys
 import unittest
 from contextlib import redirect_stderr
 from unittest import mock
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+from pluggysync.cli import main
 
-import pluggy_sync  # noqa: E402  (sys.path is set just above)
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class MissingConfigurationTest(unittest.TestCase):
@@ -20,7 +18,7 @@ class MissingConfigurationTest(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith("PLUGGY_")}
         err = io.StringIO()
         with mock.patch.dict(os.environ, env, clear=True), redirect_stderr(err):
-            code = pluggy_sync.sync()
+            code = main([])
         self.assertEqual(code, 2)
         for name in ("PLUGGY_CLIENT_ID", "PLUGGY_CLIENT_SECRET", "PLUGGY_ITEM_IDS"):
             self.assertIn(name, err.getvalue())
@@ -33,8 +31,9 @@ class MissingConfigurationTest(unittest.TestCase):
             mock.patch.dict(os.environ, env, clear=True),
             redirect_stderr(io.StringIO()),
         ):
-            pluggy_sync.sync()
+            main([])
         self.assertFalse(target.exists())
+        self.assertFalse(pathlib.Path(str(target) + ".lock").exists())
 
 
 if __name__ == "__main__":

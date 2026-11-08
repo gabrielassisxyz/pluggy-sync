@@ -13,18 +13,18 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
-import pluggy_sync
 from pluggysync.cli import main
 from pluggysync.coverage import projected_run
 from pluggysync.ledger import open_ledger
 from pluggysync.legacy_import import ImportFailed, import_states
+from pluggysync.legacy_schema import LEGACY_SCHEMA
 
 FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures"
 
 
 def build_state(path: str, script: str) -> None:
     db = sqlite3.connect(path)
-    db.executescript(pluggy_sync.SCHEMA)
+    db.executescript(LEGACY_SCHEMA)
     db.executescript((FIXTURES / script).read_text())
     db.commit()
     db.close()
