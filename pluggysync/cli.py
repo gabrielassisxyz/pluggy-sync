@@ -24,7 +24,8 @@ from .lock import LockHeld, LockRefused, ProcessLock
 from .promote import PromotionRefused, promote
 from .rebuild import rebuild
 from .reparse import ReparseRefused, reparse
-from .run import ConfigurationError, LedgerRun, code_version, parse_item_ids
+from .run import ConfigurationError, LedgerRun, code_version, parse_item_ids, self_check
+from .snapshot import SnapshotError, snapshot_path_for, write_snapshot
 from .transport import OnAttempt
 from .walk import Client, Clock, SystemClock, utcnow
 
@@ -150,7 +151,18 @@ def ledger_sync(
             f" {complete} complete, {unavailable} unavailable, {incomplete} incomplete,"
             f" {skipped} skipped; {ambiguous} ambiguous documents"
         )
-        return 0 if outcome != "failed" else 1
+        snapshot_failed = False
+        if self_check(connection, run_id):
+            _say(f"run {run_id}: self-check reports problems; keeping the previous snapshot")
+        else:
+            try:
+                write_snapshot(path, snapshot_path_for(path))
+            except SnapshotError as failure:
+                _say(str(failure))
+                snapshot_failed = True
+        if outcome == "failed" or snapshot_failed:
+            return 1
+        return 0
     finally:
         connection.close()
         lock.release()
