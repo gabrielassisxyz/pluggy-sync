@@ -1,5 +1,6 @@
 pluggy.db
 pluggy.db-*
+pluggy-snapshot.db
 *.db.lock
 __pycache__/
 *.pyc

@@ -24,7 +24,8 @@ from .lock import LockHeld, LockRefused, ProcessLock
 from .promote import PromotionRefused, promote
 from .rebuild import rebuild
 from .reparse import ReparseRefused, reparse
-from .run import ConfigurationError, LedgerRun, code_version, parse_item_ids
+from .run import ConfigurationError, LedgerRun, code_version, parse_item_ids, self_check
+from .snapshot import SnapshotError, snapshot_path_for, write_snapshot
 from .transport import OnAttempt
 from .walk import Client, Clock, SystemClock, utcnow
 
@@ -156,6 +157,15 @@ def ledger_sync(
         for line in run.summary(run_id):
             _say(line)
         code = EXIT_BY_OUTCOME.get(outcome, 1)
+        if self_check(connection, run_id):
+            _say(f"run {run_id}: self-check reports problems; keeping the previous snapshot")
+        else:
+            try:
+                write_snapshot(path, snapshot_path_for(path))
+            except SnapshotError as failure:
+                _say(str(failure))
+                # The ledger is saved; only the copy is missing, which reads as partial.
+                code = max(code, EXIT_BY_OUTCOME["partial"])
         _say(f"run {run_id}: {outcome}; exit {code}")
         return code
     finally:

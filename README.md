@@ -51,7 +51,7 @@ Re-running is safe. The ledger never overwrites: a run adds what it saw.
 | code | meaning |
 | --- | --- |
 | `0` | the run closed `complete` and every connection and consent is fresh |
-| `1` | the run closed `partial`: a walk did not finish, a document was ambiguous, or a connection or consent is stale; what was collected is saved |
+| `1` | the run closed `partial`: a walk did not finish, a document was ambiguous, or a connection or consent is stale; what was collected is saved. Also a complete run whose snapshot could not be written |
 | `2` | configuration missing or invalid; nothing was opened or written |
 | `3` | the run `failed`: the provider refused the credentials, or an unhandled error |
 
@@ -578,6 +578,12 @@ record with them is kept privately beside the database.
   numbers and counterparties.
 - A run that crashes is closed on the next start, as `interrupted`, with
   exactly what it managed to archive; nothing is resumed and nothing is lost.
+- Every run ends by writing `pluggy-snapshot.db` beside the database (or
+  `PLUGGY_SNAPSHOT` when set), a verified copy made with `Connection.backup`
+  that passes `PRAGMA integrity_check` before it replaces the previous file.
+  The backup job reads the snapshot, never the live file. A run whose
+  self-check reports problems keeps the previous snapshot, and a snapshot
+  failure raises the exit code to at least 1.
 
 ## What the API will not do
 
