@@ -10,6 +10,7 @@ can tell "not fetched" from "fetched and empty".
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -62,6 +63,9 @@ def parse_item_ids(raw: str, log: Callable[[str], None] | None = None) -> list[s
 
 
 def code_version(script_dir: str) -> str:
+    override = os.environ.get("PLUGGY_CODE_VERSION") or ""
+    if override:
+        return override
     try:
         described = subprocess.run(
             ["git", "describe", "--always", "--dirty"],

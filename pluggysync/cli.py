@@ -69,9 +69,17 @@ def check_candidate_path(path: str, live_path: str) -> str:
     directory = os.path.dirname(resolved)
     if not os.path.isdir(directory):
         raise CandidateRefused(f"{directory} does not exist")
-    inside = subprocess.run(
-        ["git", "-C", directory, "rev-parse", "--show-toplevel"], capture_output=True, text=True
-    )
+    try:
+        inside = subprocess.run(
+            ["git", "-C", directory, "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        # No git binary means no version control to protect: the refusal
+        # exists to keep a database out of a repository, and where git is
+        # absent there is none.
+        return resolved
     if inside.returncode == 0:
         ignored = subprocess.run(
             ["git", "-C", directory, "check-ignore", "-q", resolved], capture_output=True
