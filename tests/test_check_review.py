@@ -10,6 +10,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timedelta
 from unittest import mock
 
 from pluggysync.check import _moved_problems, check_file
@@ -24,6 +25,7 @@ from tests.fixtures.ledger_run import (
     ITEM_A,
     ITEM_B,
     LedgerHarness,
+    item_doc,
     script_two_items,
     tx_doc,
 )
@@ -94,6 +96,39 @@ class SweptScopeTest(unittest.TestCase):
 
         self.assertIn("still running", str(refused.exception))
         self.assertFalse(os.path.exists(destination))
+
+
+class StalePartialTest(unittest.TestCase):
+    def test_a_run_closed_partial_by_freshness_passes_the_check_and_survives_a_reparse(
+        self,
+    ) -> None:
+        harness = LedgerHarness()
+        self.addCleanup(harness.close)
+        transport = harness.transport()
+        script_two_items(transport)
+        # An item the provider last synced three days before the run.
+        now = datetime.fromisoformat(harness.clock.now())
+        transport.script[f"{BASE}/items/{ITEM_A}"].clear()
+        transport.answer(
+            f"/items/{ITEM_A}", ok(item_doc(ITEM_A, (now - timedelta(hours=72)).isoformat()))
+        )
+        run_id = harness.run(transport, [ITEM_A, ITEM_B]).execute()
+        row = harness.run_row(run_id)
+        self.assertEqual(row["outcome"], "partial")
+        self.assertIn("stale item", row["note"])
+        harness.connection.close()
+
+        code, problems, _ = check_file(harness.path)
+        self.assertEqual((code, problems), (0, []))
+
+        destination = os.path.join(os.path.dirname(harness.path), "reparsed.db")
+        reparse(harness.path, destination)
+        copy = sqlite3.connect(f"file:{destination}?mode=ro", uri=True)
+        self.addCleanup(copy.close)
+        self.assertEqual(
+            copy.execute("SELECT outcome, note FROM runs WHERE id = ?", (run_id,)).fetchone(),
+            ("partial", row["note"]),
+        )
 
 
 class StoredDayTest(unittest.TestCase):
