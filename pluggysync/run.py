@@ -18,8 +18,10 @@ from dataclasses import dataclass, replace
 from urllib.parse import parse_qs, urlsplit
 
 from .archive import Archive, archived_responses
+from .dates import parse_instant
 from .derive import Scope, canonical, close_scope, derive_scope, load_scope
 from .events import ambiguous_documents, project_pending_runs, project_run
+from .freshness import stale_in_run
 from .ledger import local_day, transaction
 from .replay import replay_walk, scope_request, walk_scope
 from .transport import OnAttempt
@@ -187,11 +189,19 @@ class LedgerRun:
                 problems = self_check(self._db, run_id)
                 if problems:
                     raise SelfCheckFailed(problems)
-                outcome = (
-                    "complete"
-                    if self._every_owed_scope_done(run_id) and not ambiguous
-                    else "partial"
-                )
+                if self._authentication_refused(run_id):
+                    # Nothing was collected and no walk could start: that is a failed
+                    # run, not a partial one with every walk incomplete.
+                    outcome, note = "failed", "authentication refused: no walk could start"
+                else:
+                    stale = self._stale(run_id)
+                    outcome = (
+                        "complete"
+                        if self._every_owed_scope_done(run_id) and not ambiguous and not stale
+                        else "partial"
+                    )
+                    if stale:
+                        note = "; ".join(item.line() for item in stale)
             else:
                 # Interrupted or failed: project what did commit, only if it checks out.
                 problems = self_check(self._db, run_id)
@@ -361,6 +371,38 @@ class LedgerRun:
         return plans
 
     # -- run close ------------------------------------------------------------
+
+    def _stale(self, run_id: int) -> list:
+        started = self._db.execute("SELECT started_at FROM runs WHERE id = ?", (run_id,)).fetchone()
+        now = parse_instant(started[0]) if started else None
+        if now is None:
+            return []
+        return stale_in_run(self._db, run_id, now)
+
+    def _authentication_refused(self, run_id: int) -> bool:
+        responses = self._db.execute(
+            "SELECT count(*) FROM responses WHERE run_id = ?", (run_id,)
+        ).fetchone()[0]
+        refused, answered = self._db.execute(
+            "SELECT sum(CASE WHEN error LIKE 'auth: %' THEN 1 ELSE 0 END),"
+            " sum(CASE WHEN outcome IN ('complete', 'unavailable') THEN 1 ELSE 0 END)"
+            " FROM scopes WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        return int(responses) == 0 and int(refused or 0) > 0 and int(answered or 0) == 0
+
+    def summary(self, run_id: int) -> list[str]:
+        """One line per owed walk that did not finish and per stale item or consent."""
+        lines = [
+            f"{kind} {parent} {outcome}{': ' + error if error else ''}"
+            for kind, parent, outcome, error in self._db.execute(
+                "SELECT kind, parent, outcome, error FROM scopes WHERE run_id = ? AND expected = 1"
+                " AND outcome IN ('incomplete', 'skipped', 'pending') ORDER BY id",
+                (run_id,),
+            )
+        ]
+        lines.extend(item.line() for item in self._stale(run_id))
+        return lines
 
     def _every_owed_scope_done(self, run_id: int) -> bool:
         undone = self._db.execute(

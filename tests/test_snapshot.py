@@ -130,7 +130,7 @@ class SnapshotCliTest(unittest.TestCase):
 
         code, out, _ = self.run_cli("--candidate", candidate)
 
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 3)
         self.assertIn("failed", out)
         snapshot = os.path.join(self.directory.name, "pluggy-snapshot.db")
         self.assertTrue(os.path.exists(snapshot))
@@ -151,7 +151,7 @@ class SnapshotCliTest(unittest.TestCase):
         self.transport = sparse
         with mock.patch("pluggysync.cli.self_check", return_value=["injected self-check problem"]):
             code, _, err = self.run_cli("--candidate", candidate)
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 3)
         with open(snapshot, "rb") as handle:
             self.assertEqual(handle.read(), before)
 

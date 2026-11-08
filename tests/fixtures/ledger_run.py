@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import tempfile
+from datetime import datetime, timedelta
 from typing import Any
 
 from pluggysync.ledger import open_ledger
@@ -24,8 +25,14 @@ INVESTMENT_A1 = "investment-00a1"
 PAGE_1 = "pageSize=500&page=1"
 
 
-def item_doc(item_id: str) -> dict[str, Any]:
-    return {"id": item_id, "connector": {"id": 1, "name": "Synthetic Bank"}, "status": "UPDATED"}
+def item_doc(item_id: str, updated_at: str = "2026-01-01T06:00:00+00:00") -> dict[str, Any]:
+    return {
+        "id": item_id,
+        "connector": {"id": 1, "name": "Synthetic Bank"},
+        "status": "UPDATED",
+        "executionStatus": "SUCCESS",
+        "lastUpdatedAt": updated_at,
+    }
 
 
 def account_doc(account_id: str, item_id: str, kind: str = "BANK") -> dict[str, Any]:
@@ -56,8 +63,8 @@ def bill_doc(bill_id: str, due: str = "2026-02-10T00:00:00.000Z") -> dict[str, A
     return {"id": bill_id, "dueDate": due, "totalAmount": 300.0}
 
 
-def consent_doc(item_id: str) -> dict[str, Any]:
-    return {"id": f"consent-{item_id[-1]}", "itemId": item_id, "expiresAt": "2027-01-01T00:00:00Z"}
+def consent_doc(item_id: str, expires_at: str = "2027-01-01T00:00:00Z") -> dict[str, Any]:
+    return {"id": f"consent-{item_id[-1]}", "itemId": item_id, "expiresAt": expires_at}
 
 
 def identity_doc(item_id: str) -> dict[str, Any]:
@@ -67,8 +74,14 @@ def identity_doc(item_id: str) -> dict[str, Any]:
 def script_item(
     transport: FakeTransport, item_id: str, accounts: list[dict], investments: list[dict]
 ) -> None:
-    transport.answer(f"/items/{item_id}", ok(item_doc(item_id)))
-    transport.answer(f"/consents?itemId={item_id}&{PAGE_1}", ok(paged_page([consent_doc(item_id)])))
+    # Fresh relative to the fake clock: synced six hours ago, consent good for a year.
+    now = datetime.fromisoformat(transport.clock.now())
+    updated = (now - timedelta(hours=6)).isoformat()
+    expires = (now + timedelta(days=365)).isoformat()
+    transport.answer(f"/items/{item_id}", ok(item_doc(item_id, updated)))
+    transport.answer(
+        f"/consents?itemId={item_id}&{PAGE_1}", ok(paged_page([consent_doc(item_id, expires)]))
+    )
     transport.answer(f"/identity?itemId={item_id}", ok(identity_doc(item_id)))
     transport.answer(f"/investments?itemId={item_id}&{PAGE_1}", ok(paged_page(investments)))
     transport.answer(f"/accounts?itemId={item_id}&{PAGE_1}", ok(paged_page(accounts)))

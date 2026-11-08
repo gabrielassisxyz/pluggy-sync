@@ -31,6 +31,9 @@ from .walk import Client, Clock, SystemClock, utcnow
 
 MakeClient = Callable[[OnAttempt], Client]
 
+# What the process says about a run. 2 is configuration, raised before any write.
+EXIT_BY_OUTCOME = {"complete": 0, "partial": 1, "failed": 3}
+
 
 class CandidateRefused(Exception):
     pass
@@ -151,7 +154,9 @@ def ledger_sync(
             f" {complete} complete, {unavailable} unavailable, {incomplete} incomplete,"
             f" {skipped} skipped; {ambiguous} ambiguous documents"
         )
-        snapshot_failed = False
+        for line in run.summary(run_id):
+            _say(line)
+        code = EXIT_BY_OUTCOME.get(outcome, 1)
         if self_check(connection, run_id):
             _say(f"run {run_id}: self-check reports problems; keeping the previous snapshot")
         else:
@@ -159,10 +164,10 @@ def ledger_sync(
                 write_snapshot(path, snapshot_path_for(path))
             except SnapshotError as failure:
                 _say(str(failure))
-                snapshot_failed = True
-        if outcome == "failed" or snapshot_failed:
-            return 1
-        return 0
+                # The ledger is saved; only the copy is missing, which reads as partial.
+                code = max(code, EXIT_BY_OUTCOME["partial"])
+        _say(f"run {run_id}: {outcome}; exit {code}")
+        return code
     finally:
         connection.close()
         lock.release()

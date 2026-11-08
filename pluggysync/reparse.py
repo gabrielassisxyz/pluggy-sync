@@ -390,6 +390,10 @@ def _reparse_one_run(
     ) + len(extra_skipped)
     if outcome in ("failed", "interrupted"):
         new_outcome, new_note = outcome, note
+    elif outcome == "partial" and isinstance(note, str) and "stale " in note:
+        # Closed partial by the freshness check: the verdict and its reason are
+        # the run's, not the parser's, and a reparse keeps them.
+        new_outcome, new_note = "partial", note
     else:
         new_outcome = "complete" if undone == 0 and not ambiguous else "partial"
         new_note = None
