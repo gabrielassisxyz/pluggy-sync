@@ -8,6 +8,10 @@ __pycache__/
 # bv (beads viewer) local config and caches
 .bv/
 
+# Agent tooling a contributor installs for their own use: skills, settings.
+# It belongs to the machine, not to the project.
+.claude/
+
 # >>> repo-harness:gitignore-private-boundary >>>
 # Maintainer notes — not part of the project; they live in the private notes repo,
 # reachable through the `local` symlink. NO trailing slash on any path in this block:
